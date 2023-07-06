@@ -87,11 +87,11 @@ mutable struct HarmonicAnalysis
     forcefunctions::Vector{Matrix{Float64}}
     featurevectors::Vector{Vector{Float64}}
 
-    function HarmonicAnalysis(model::TrussModel; δ = 20, dims = 16)
+    function HarmonicAnalysis(model::TrussModel; delta = 20, dims = 16)
         C = connectivity(model)
         forces = axialforce(model.elements)
 
-        nodeforces = [NodeForce(node, model, C, forces; δ = δ) for node in model.nodes]
+        nodeforces = [NodeForce(node, model, C, forces; δ = delta) for node in model.nodes]
 
         forcefunctions = getproperty.(nodeforces, :forcefunction)
 
