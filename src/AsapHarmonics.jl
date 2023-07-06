@@ -1,6 +1,6 @@
 module AsapHarmonics
 
-using Asap, LinearAlgebra
+using Asap, LinearAlgebra, SparseArrays
 using FastSphericalHarmonics
 
 l_max = 25
