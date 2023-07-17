@@ -1,4 +1,4 @@
-mutable struct NodeForceAnalysisAnalysis
+mutable struct NodeForceAnalysis
     node::TrussNode
     forcepositions::Matrix{Float64}
     forcemagnitudes::Vector{Float64}
