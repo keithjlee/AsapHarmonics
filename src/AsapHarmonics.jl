@@ -14,6 +14,6 @@ include("functions.jl")
 export generate_feature_vector
 
 include("types.jl")
-export NodeForce, HarmonicAnalysis
+export NodeForceAnalysisAnalysisAnalysisAnalysis, HarmonicAnalysis
 
 end # module AsapHarmonics

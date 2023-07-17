@@ -1,10 +1,10 @@
-mutable struct NodeForce
+mutable struct NodeForceAnalysisAnalysis
     node::TrussNode
     forcepositions::Matrix{Float64}
     forcemagnitudes::Vector{Float64}
     forcefunction::Matrix{Float64}
 
-    function NodeForce(node::TrussNode, model::TrussModel, C::SparseMatrixCSC{Int64, Int64}, forces::Vector{Float64}; δ = 20)
+    function NodeForceAnalysis(node::TrussNode, model::TrussModel, C::SparseMatrixCSC{Int64, Int64}, forces::Vector{Float64}; δ = 20)
         i = node.nodeID
 
         #indices of elements connected to node i
@@ -42,7 +42,7 @@ mutable struct NodeForce
         
     end
 
-    function NodeForce(i::Int64, model::TrussModel, C::SparseMatrixCSC{Int64, Int64}, forces::Vector{Float64}; δ = 20)
+    function NodeForceAnalysis(i::Int64, model::TrussModel, C::SparseMatrixCSC{Int64, Int64}, forces::Vector{Float64}; δ = 20)
         
         node = model.nodes[i]
 
@@ -83,7 +83,7 @@ end
 
 mutable struct HarmonicAnalysis
     model::TrussModel
-    nodeforces::Vector{NodeForce}
+    NodeForceAnalysiss::Vector{NodeForceAnalysis}
     forcefunctions::Vector{Matrix{Float64}}
     featurevectors::Vector{Vector{Float64}}
 
@@ -91,12 +91,12 @@ mutable struct HarmonicAnalysis
         C = connectivity(model)
         forces = axialforce(model.elements)
 
-        nodeforces = [NodeForce(node, model, C, forces; δ = delta) for node in model.nodes]
+        NodeForceAnalysiss = [NodeForceAnalysis(node, model, C, forces; δ = delta) for node in model.nodes]
 
-        forcefunctions = getproperty.(nodeforces, :forcefunction)
+        forcefunctions = getproperty.(NodeForceAnalysiss, :forcefunction)
 
         featurevectors = generate_feature_vector.(forcefunctions; dims = dims)
 
-        new(model, nodeforces, forcefunctions, featurevectors)
+        new(model, NodeForceAnalysiss, forcefunctions, featurevectors)
     end
 end
