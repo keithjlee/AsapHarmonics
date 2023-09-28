@@ -1,5 +1,5 @@
 mutable struct NodeForceAnalysis
-    node::AbstractNode
+    node::Asap.AbstractNode
     forcepositions::Matrix{Float64}
     forcemagnitudes::Vector{Float64}
     forcefunction::Matrix{Float64}
