@@ -89,7 +89,7 @@ mutable struct HarmonicAnalysis
 
     function HarmonicAnalysis(model::TrussModel; delta = 20, dims = 16)
         C = connectivity(model)
-        forces = axialforce(model.elements)
+        forces = axial_force(model.elements)
 
         nodeforces = [NodeForceAnalysis(node, model, C, forces; δ = delta) for node in model.nodes]
 
