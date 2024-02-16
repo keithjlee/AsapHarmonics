@@ -1,7 +1,7 @@
 ![](assets/nodes-axo.png)
 
 # AsapHarmonics
-Lightweight implementation of the [Node Harmonic shape descriptor](https://link.springer.com/article/10.1007/s44150-022-00021-4). Relies on the [aSAP.jl](https://github.com/keithjlee/Asap) framework.
+Lightweight implementation of the [Node Harmonic shape descriptor](https://link.springer.com/article/10.1007/s44150-022-00021-4). Relies on the [Asap.jl](https://github.com/keithjlee/Asap) framework.
 
 Given an analyzed `TrussModel`, a node force demand analysis can be performed via:
 ```julia
