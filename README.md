@@ -1,3 +1,5 @@
+![](assets/nodes-axo.png)
+
 # AsapHarmonics
 Lightweight implementation of the [Node Harmonic shape descriptor](https://link.springer.com/article/10.1007/s44150-022-00021-4). Relies on the [aSAP.jl](https://github.com/keithjlee/Asap) framework.
 
@@ -11,8 +13,4 @@ Where:
 
 The representative feature vectors of nodal demands can be extracted from `HarmonicAnalysis.featurevecture`. This can form the basis of clustering/rationalization of truss connections.
 
-![](assets/truss.png)
-
 ![](assets/blobs.png)
-
-![](assets/clusters.png)
