@@ -135,7 +135,7 @@ mutable struct NodeForces2d
         force_function = circular_gaussian(force_positions, node_forces, δ, n)
             
         #return
-        new(node, force_positions, forces, force_function)
+        new(node, force_positions, node_forces, force_function)
     end
 end
 
