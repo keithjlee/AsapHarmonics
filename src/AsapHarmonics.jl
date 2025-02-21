@@ -1,7 +1,7 @@
 module AsapHarmonics
 
 using Asap, LinearAlgebra, SparseArrays
-using FastSphericalHarmonics
+using FastSphericalHarmonics, FFTW
 
 l_max = 25
 resolution = 90
@@ -11,9 +11,10 @@ export Y
 export xsphere, ysphere, zsphere
 
 include("functions.jl")
-export generate_feature_vector
+export spherical_feature_vector
 
 include("types.jl")
-export NodeForceAnalysis, HarmonicAnalysis
+export NodeForces, HarmonicAnalysis
+export NodeForces2d, HarmonicAnalysis2d
 
 end # module AsapHarmonics
