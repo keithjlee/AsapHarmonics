@@ -118,7 +118,7 @@ mutable struct NodeForces2d
         #force values
         node_forces = forces[i_connected]
         if !isempty(external_loads)
-            node_forces = [node_forces; norm.(external_loads)]
+            node_forces = [node_forces; external_loads]
         end
 
         if normalize_forces
