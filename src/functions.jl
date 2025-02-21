@@ -11,7 +11,7 @@ function spherical_gaussian(func::Matrix{Float64}, θ::Float64, ϕ::Float64; δ 
     return val
 end
 
-function generate_feature_vector(forcefunction::Matrix{Float64}; dims = 16)
+function spherical_feature_vector(forcefunction::Matrix{Float64}; dims = 16)
 
     coefficients = sph_transform(forcefunction)
 
@@ -22,4 +22,32 @@ function generate_feature_vector(forcefunction::Matrix{Float64}; dims = 16)
     end
 
     [norm(sum(C[i] .* Y[i])) for i = 1:dims]
+end
+
+function circular_gaussian(positions::Vector{Vector{Float64}}, magnitudes::Vector{Float64}, σ::Float64, n = 90)
+
+    angles = range(0, 2pi, n+1)[1:end-1]
+
+    force_function = zeros(n)
+
+    for i in 1:n
+        angle = angles[i]
+        angle_vec = [cos(angle), sin(angle)]
+
+        for (position, magnitude) in zip(positions, magnitudes)
+            θ = acos(dot(position, angle_vec))
+
+            force_function[i] += exp(-0.5 * (θ / σ)^2) * magnitude
+        end
+
+    end
+
+    return force_function
+
+end
+
+function circular_feature_vector(forcefunction::Vector{Float64}; dims = 16)
+
+    return abs.(rfft(forcefunction)[1:dims])
+
 end
