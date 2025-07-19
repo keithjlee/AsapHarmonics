@@ -4,7 +4,7 @@ mutable struct NodeForces
     forcemagnitudes::Vector{Float64}
     forcefunction::Matrix{Float64}
 
-    function NodeForces(node::TrussNode, model::TrussModel, C::SparseMatrixCSC{Int64, Int64}, forces::Vector{Float64}; δ = 20, normalize = false)
+    function NodeForces(node::TrussNode, model::TrussModel, C::SparseMatrixCSC{Int64, Int64}, forces::Vector{Float64}; δ = 20, normalize_forces = false)
         i = node.nodeID
 
         #indices of elements connected to node i
@@ -15,12 +15,16 @@ mutable struct NodeForces
 
         #external forces
         # external_loads = getproperty.(model.loads[node.loadIDs], :value)
-        external_loads = normalize ? [normalize(load.value) for load in model.loads if load.node.nodeID == i] : [load.value for load in model.loads if load.node.nodeID == i]
+        external_loads = [load.value for load in model.loads if load.node.nodeID == i]
 
 
         #reaction if applicable
         if !iszero(norm(node.reaction))
             push!(external_loads, node.reaction)
+        end
+
+        if normalize_forces
+            external_loads = normalize.(external_loads)
         end
 
         #force values
@@ -55,7 +59,7 @@ mutable struct HarmonicAnalysis
         C = connectivity(model)
         forces = axial_force.(model.elements)
 
-        nodeforces = [NodeForces(node, model, C, forces; δ = delta, normalize = normalize_forces) for node in model.nodes]
+        nodeforces = [NodeForces(node, model, C, forces; δ = delta, normalize_forces = normalize_forces) for node in model.nodes]
 
         forcefunctions = getproperty.(nodeforces, :forcefunction)
 
