@@ -1,11 +1,11 @@
 mutable struct NodeForces
-    node::Asap.AbstractNode
+    node::Node{Float64}
     forcepositions::Matrix{Float64}
     forcemagnitudes::Vector{Float64}
     forcefunction::Matrix{Float64}
 
-    function NodeForces(node::TrussNode, model::TrussModel, C::SparseMatrixCSC{Int64, Int64}, forces::Vector{Float64}; δ = 20, normalize_forces = false)
-        i = node.nodeID
+    function NodeForces(node::Node, model::Model, C::SparseMatrixCSC{Int64, Int64}, forces::Vector{Float64}; δ = 20, normalize_forces = false)
+        i = node.index
 
         #indices of elements connected to node i
         i_connected = findall(.!iszero.(C[:, i]))
@@ -15,12 +15,13 @@ mutable struct NodeForces
 
         #external forces
         # external_loads = getproperty.(model.loads[node.loadIDs], :value)
-        external_loads = [load.value for load in model.loads if load.node.nodeID == i]
+        external_loads = [load.value for load in model.loads if load isa NodeLoad && load.node.index == i]
 
 
         #reaction if applicable
-        if !iszero(norm(node.reaction))
-            push!(external_loads, node.reaction)
+        rxn3 = collect(reaction(model.results, node)[1:3])
+        if !iszero(norm(rxn3))
+            push!(external_loads, rxn3)
         end
 
         if normalize_forces
@@ -55,14 +56,14 @@ mutable struct NodeForces
 end
 
 mutable struct HarmonicAnalysis
-    model::TrussModel
+    model::Model{Float64}
     nodeforces::Vector{NodeForces}
     forcefunctions::Vector{Matrix{Float64}}
     featurevectors::Vector{Vector{Float64}}
 
-    function HarmonicAnalysis(model::TrussModel; delta = 20, dims = 16, normalize_forces = false)
+    function HarmonicAnalysis(model::Model; delta = 20, dims = 16, normalize_forces = false)
         C = connectivity(model)
-        forces = axial_force.(model.elements)
+        forces = [axial_force(model.results, el) for el in model.elements]
 
         nodeforces = [NodeForces(node, model, C, forces; δ = delta, normalize_forces = normalize_forces) for node in model.nodes]
 
@@ -75,13 +76,13 @@ mutable struct HarmonicAnalysis
 end
 
 mutable struct NodeForces2d
-    node::Asap.AbstractNode
+    node::Node{Float64}
     forcepositions::Vector{Vector{Float64}}
     forcemagnitudes::Vector{Float64}
     forcefunction::Vector{Float64}
 
-    function NodeForces2d(node::TrussNode, model::TrussModel, C::SparseMatrixCSC{Int64, Int64}, forces::Vector{Float64}; δ = 0.1, n = 90, normalize_forces = false)
-        i = node.nodeID
+    function NodeForces2d(node::Node, model::Model, C::SparseMatrixCSC{Int64, Int64}, forces::Vector{Float64}; δ = 0.1, n = 90, normalize_forces = false)
+        i = node.index
 
         #indices of elements connected to node i
         i_connected = findall(.!iszero.(C[:, i]))
@@ -94,8 +95,8 @@ mutable struct NodeForces2d
         external_load_positions = Vector{Vector{Float64}}()
 
         for load in model.loads
-            if load.node.nodeID == i
-                val = load.value[1:2]
+            if load isa NodeLoad && load.node.index == i
+                val = collect(load.value[1:2])
 
                 #position of load vector (default top)
                 position_vector = normalize(val)
@@ -110,9 +111,10 @@ mutable struct NodeForces2d
         end
 
         #reaction if applicable
-        if !iszero(norm(model.nodes[i].reaction))
+        rxn6 = reaction(model.results, model.nodes[i])
+        if !iszero(norm(rxn6))
 
-            rxn = model.nodes[i].reaction[1:2]
+            rxn = collect(rxn6[1:2])
 
             #position of reaction vector (default bottom
             position_vector = normalize(rxn)
@@ -136,7 +138,7 @@ mutable struct NodeForces2d
         end
 
         #force positions
-        force_positions = [-e.LCS[1][1:2] .* factor for (e, factor) in zip(model.elements[i_connected], start_end)]
+        force_positions = [-local_frame(e)[1, 1:2] .* factor for (e, factor) in zip(model.elements[i_connected], start_end)]
         if !isempty(external_loads)
             force_positions = [force_positions; external_load_positions]
         end
@@ -150,14 +152,14 @@ mutable struct NodeForces2d
 end
 
 mutable struct HarmonicAnalysis2d
-    model::TrussModel
+    model::Model{Float64}
     nodeforces::Vector{NodeForces2d}
     forcefunctions::Vector{Vector{Float64}}
     featurevectors::Vector{Vector{Float64}}
 
-    function HarmonicAnalysis2d(model::TrussModel; delta = 0.1, n = 90, dims = 16, normalize_forces = false)
+    function HarmonicAnalysis2d(model::Model; delta = 0.1, n = 90, dims = 16, normalize_forces = false)
         C = connectivity(model)
-        forces = axial_force.(model.elements)
+        forces = [axial_force(model.results, el) for el in model.elements]
 
         nodeforces = [NodeForces2d(node, model, C, forces; δ = delta, n = n, normalize_forces = normalize_forces) for node in model.nodes]
 
