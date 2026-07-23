@@ -12,16 +12,28 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
+[weakdeps]
+Clustering = "aaaa29a8-35af-508c-8bc3-b662a17a0fe5"
+MultivariateStats = "6f286f6a-111f-5878-ab1e-185364afe411"
+
+[extensions]
+AsapHarmonicsClusteringExt = "Clustering"
+AsapHarmonicsMDSExt = "MultivariateStats"
+
 [compat]
 Asap = "1"
+Clustering = "0.15"
 FFTW = "1.8.1"
+MultivariateStats = "0.10"
 SpecialFunctions = "2"
 StaticArrays = "1"
 julia = "1.10"
 
 [extras]
+Clustering = "aaaa29a8-35af-508c-8bc3-b662a17a0fe5"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+MultivariateStats = "6f286f6a-111f-5878-ab1e-185364afe411"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["ForwardDiff", "Test"]
+test = ["Clustering", "ForwardDiff", "MultivariateStats", "Test"]

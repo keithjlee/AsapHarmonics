@@ -229,4 +229,103 @@ const MAGS = [2.0, -1.5, 0.8, 3.0, -2.2]
             @test isapprox(fv, fv_rot; rtol = 1e-8, atol = 1e-9)
         end
     end
+
+    @testset "bounding sphere (Welzl)" begin
+        # two points: radius = half the distance, center = midpoint
+        b = bounding_sphere([[0.0, 0.0], [4.0, 0.0]])
+        @test b.radius ≈ 2.0 && b.center ≈ [2.0, 0.0]
+
+        # equilateral triangle, side s: circumradius s/√3
+        s = 2.0
+        tri = [[0.0, 0.0], [s, 0.0], [s / 2, s * √3 / 2]]
+        @test bounding_sphere(tri).radius ≈ s / √3
+
+        # obtuse triangle: minimal ball is on the longest side, NOT the
+        # circumcircle (catches naive implementations)
+        obtuse = [[0.0, 0.0], [10.0, 0.0], [5.0, 0.5]]
+        bo = bounding_sphere(obtuse)
+        @test bo.radius ≈ 5.0 && bo.center ≈ [5.0, 0.0]
+
+        # unit square: radius = half diagonal
+        sq = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
+        @test bounding_sphere(sq).radius ≈ √2 / 2
+
+        # high-dimensional sanity (deterministic pseudo-random points)
+        pts = [[sin(17.3i + 3.1j) + 0.1j for j = 1:17] for i = 1:60]
+        bh = bounding_sphere(pts)
+        @test all(p -> norm(p - bh.center) <= bh.radius * (1 + 1e-8), pts)
+        maxpair = maximum(norm(pts[i] - pts[j]) for i = 1:60 for j = i+1:60)
+        centroid = sum(pts) / 60
+        @test bh.radius >= maxpair / 2 - 1e-8
+        @test bh.radius <= maximum(norm(p - centroid) for p in pts) + 1e-8
+        # at least two points on the boundary of the minimal ball
+        @test count(p -> norm(p - bh.center) >= bh.radius * (1 - 1e-6), pts) >= 2
+    end
+
+    @testset "analysis layer" begin
+        ha = HarmonicAnalysis(small_truss(); dims = 8)
+        n = length(ha.signatures)
+
+        F = feature_matrix(ha)
+        @test size(F) == (8, n)
+
+        D = distance_matrix(ha)
+        @test size(D) == (n, n) && issymmetric(D) && all(iszero, D[i, i] for i = 1:n)
+        @test D[1, 2] ≈ norm(ha.featurevectors[1] - ha.featurevectors[2])
+
+        c = complexity(ha)
+        sc = soft_complexity(ha)
+        @test c > 0 && sc > 0
+        @test sc <= 2c + 1e-12
+
+        # complexity scales linearly with force magnitudes: FV(cf) = c FV(f)
+        fvs2 = [2.0 .* fv for fv in ha.featurevectors]
+        @test complexity(fvs2) ≈ 2c
+        @test soft_complexity(fvs2) ≈ 2sc
+
+        # differentiable chain: forces -> feature vectors -> soft complexity
+        dirs_b = normalize.([[1.0, 0.0, 0.1], [0.0, -1.0, 0.4], [-0.7, 0.7, 0.0]])
+        function chain(m)
+            fv1 = spherical_feature_vector(DIRS, m; delta = 20, dims = 8)
+            fv2 = spherical_feature_vector(dirs_b, m[1:3]; delta = 20, dims = 8)
+            return soft_complexity([fv1, fv2])
+        end
+        g = ForwardDiff.gradient(chain, MAGS)
+        h = 1e-6
+        g_fd = [
+            (chain([MAGS[1:i-1]; MAGS[i] + h; MAGS[i+1:end]]) -
+             chain([MAGS[1:i-1]; MAGS[i] - h; MAGS[i+1:end]])) / 2h for i in eachindex(MAGS)
+        ]
+        @test isapprox(g, g_fd; rtol = 1e-5)
+
+        # per-cluster complexity: cluster of identical demands has radius 0
+        fvs = [ha.featurevectors; [copy(ha.featurevectors[1])]]
+        assignments = [1, 2, 2, 2, 1]
+        cc = cluster_complexities(fvs, assignments)
+        @test length(cc) == 2
+        @test cc[1] ≈ 0 atol = 1e-12 # nodes 1 and 5 are identical
+        @test cc[2] ≈ complexity(fvs[2:4])
+    end
+
+    @testset "extensions: clustering and MDS" begin
+        using Clustering, MultivariateStats
+
+        ha = HarmonicAnalysis(small_truss(); dims = 8)
+        n = length(ha.signatures)
+
+        km = cluster_nodes(ha, 2; maxiter = 500)
+        @test km isa Clustering.KmeansResult
+        @test length(km.assignments) == n && sort(unique(km.assignments)) == [1, 2]
+
+        cc = cluster_complexities(ha, km.assignments)
+        @test length(cc) == 2 && all(>=(0), cc)
+        @test maximum(cc) <= complexity(ha) + 1e-10 # clustering can only shrink spheres
+
+        E = embed_nodes(ha; maxoutdim = 2)
+        @test size(E) == (2, n)
+        # MDS preserves distances up to the embedding truncation
+        D = distance_matrix(ha)
+        Demb = [norm(E[:, i] - E[:, j]) for i = 1:n, j = 1:n]
+        @test maximum(abs.(Demb .- D)) / maximum(D) < 0.5
+    end
 end
