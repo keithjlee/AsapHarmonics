@@ -26,6 +26,11 @@ sf = SpaceFrame(8, 1.0, 8, 1.0, 0.8, (u, v) -> 1.0 * sinpi(u) * sinpi(v), sectio
 model = sf.model
 solve!(model)
 
+# NOTE: `updatemodel(p, x)` (step 4) materializes the optimized design INTO
+# the reference model held by OptParams — it mutates `model` in place and
+# returns it. Keep an untouched copy for the before/after comparison.
+model_base = deepcopy(model)
+
 # ## 2. Design variables and the differentiable objective
 #
 # Every top-chord node may move vertically. `harmonic_params` precompiles the
@@ -61,11 +66,10 @@ println("final exact complexity:  ", round(complexity(x, p, hp), digits = 3))
 
 # ## 4. Before / after
 #
-# `updatemodel` materializes the optimized design back into a solved Asap
-# model for inspection and plotting.
+# `updatemodel` materializes the optimized design back into the (solved)
+# reference model — mutating `model`; `model_base` holds the original.
 
 model_opt = updatemodel(p, x)
-solve!(model_opt)
 
 function force_view(pos, m; title = "")
     ax = Axis3(pos; title = title, aspect = :data, protrusions = 0,
@@ -84,7 +88,7 @@ end
 begin
     fig = Figure(size = (1100, 420))
 
-    force_view(fig[1, 1], model; title = "BASE DESIGN")
+    force_view(fig[1, 1], model_base; title = "BASE DESIGN")
     force_view(fig[1, 2], model_opt; title = "COMPLEXITY-OPTIMIZED")
 
     ax = Axis(
@@ -102,7 +106,7 @@ end
 # huddle closer together — nodes have become more similar, and fewer unique
 # connections cover the design.
 
-ha0 = HarmonicAnalysis(model; delta = 20, dims = 16)
+ha0 = HarmonicAnalysis(model_base; delta = 20, dims = 16)
 ha1 = HarmonicAnalysis(model_opt; delta = 20, dims = 16)
 
 begin
