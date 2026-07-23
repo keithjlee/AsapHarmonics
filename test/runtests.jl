@@ -9,6 +9,7 @@ using Asap
 using Test
 using LinearAlgebra
 using ForwardDiff
+using StaticArrays
 
 # Rodrigues rotation matrix
 function rotmat(axis::Vector{Float64}, angle::Float64)
@@ -399,5 +400,126 @@ const MAGS = [2.0, -1.5, 0.8, 3.0, -2.2]
         # exact bounding-sphere complexity for reporting
         @test complexity(x0, p, hp) > 0
         @test soft_complexity(x0, p, hp) <= 2 * complexity(x0, p, hp) + 1e-10
+    end
+
+    @testset "regression: pinned descriptor values" begin
+        # exact values pinned at v2.0; any change to kernel constants or
+        # normalization conventions must fail here
+        fv = spherical_feature_vector(DIRS, MAGS; delta = 20, dims = 6)
+        @test isapprox(fv, [
+            0.09305382717253959, 0.24633734882687916, 0.5176945542071242,
+            0.5154622784707792, 0.4278315816610324, 0.44247011981655654,
+        ]; rtol = 1e-12)
+
+        fv2 = circular_feature_vector([0.2, 1.7, 3.5, 5.0], [1.0, -2.0, 0.5, 1.5]; sigma = 0.1, dims = 6)
+        @test isapprox(fv2, [
+            0.039894228040143274, 0.1429991290743065, 0.07882465882990904,
+            0.12313634362544537, 0.060188376661944896, 0.1281062854715314,
+        ]; rtol = 1e-12)
+    end
+
+    @testset "zonal coefficients vs direct quadrature" begin
+        # independent check of λₗ = 2π ∫₋₁¹ e^(κ(t-1)) Pₗ(t) dt against the
+        # besselix evaluation, by fine trapezoidal quadrature
+        κ = 40.0
+        dims = 6
+        N = 1_000_000
+        ts = range(-1.0, 1.0, N + 1)
+        acc = zeros(dims)
+        for (a, t) in enumerate(ts)
+            w = (a == 1 || a == N + 1) ? 0.5 : 1.0
+            g = w * exp(κ * (t - 1))
+            Pp, Pc = 1.0, t
+            acc[1] += g
+            acc[2] += g * t
+            for l = 2:dims-1
+                Pn = ((2l - 1) * t * Pc - (l - 1) * Pp) / l
+                acc[l+1] += g * Pn
+                Pp, Pc = Pc, Pn
+            end
+        end
+        λ_quad = 2π .* acc .* (2 / N)
+        @test isapprox(zonal_coefficients(dims, κ), λ_quad; rtol = 1e-7)
+    end
+
+    @testset "descriptor edge cases" begin
+        # dims = 1
+        @test spherical_feature_vector(DIRS, MAGS; delta = 20, dims = 1) ≈
+              [spherical_feature_vector(DIRS, MAGS; delta = 20, dims = 6)[1]]
+
+        # empty signature (isolated node): all-zero feature vector
+        @test spherical_feature_vector(Vector{Vector{Float64}}(), Float64[]; dims = 5) == zeros(5)
+        @test circular_feature_vector(Float64[], Float64[]; dims = 5) == zeros(5)
+
+        # zero magnitudes
+        @test spherical_feature_vector(DIRS, zeros(5); dims = 5) == zeros(5)
+
+        # delta = 0: uniform kernel, only the l = 0 band survives
+        fv0 = spherical_feature_vector(DIRS, MAGS; delta = 0, dims = 5)
+        @test fv0[1] ≈ sqrt(4π) * abs(sum(MAGS))
+        @test all(iszero, fv0[2:end])
+
+        # high degrees are finite and decay
+        fvhi = spherical_feature_vector(DIRS, MAGS; delta = 20, dims = 40)
+        @test all(isfinite, fvhi)
+        @test fvhi[end] < maximum(fvhi) / 100
+
+        # error paths
+        @test_throws DimensionMismatch spherical_feature_vector(DIRS, MAGS[1:3])
+        @test_throws ArgumentError spherical_feature_vector(DIRS, MAGS; dims = 0)
+        @test_throws DimensionMismatch spherical_feature_vector(reduce(hcat, DIRS)', MAGS)
+        @test_throws ArgumentError bounding_sphere(Vector{Vector{Float64}}())
+        @test_throws DimensionMismatch cluster_complexities([[1.0], [2.0]], [1, 1, 2])
+    end
+
+    @testset "bounding sphere edge cases" begin
+        @test bounding_sphere([[1.0, 2.0, 3.0]]).radius == 0.0
+        @test bounding_sphere([[1.0, 2.0], [1.0, 2.0], [1.0, 2.0]]).radius ≈ 0.0 atol = 1e-12
+
+        # collinear points: half the span
+        pts = [[Float64(t), 2t, -t] for t in (0.0, 0.3, 0.5, 1.0)]
+        @test bounding_sphere(pts).radius ≈ norm(pts[end] - pts[1]) / 2
+
+        # duplicates mixed in
+        b = bounding_sphere([[0.0, 0.0], [0.0, 0.0], [2.0, 0.0], [1.0, 0.2]])
+        @test b.radius ≈ 1.0
+        @test isapprox(b.center, [1.0, 0.0]; atol = 1e-9)
+    end
+
+    @testset "allocations and inference" begin
+        d8 = normalize.([[1.0, 0.1i, 1 - 0.2i] for i = 1:8])
+        m8 = collect(1.0:8.0)
+
+        spherical_feature_vector(d8, m8; delta = 20, dims = 17) # warm up
+        @test (@allocated spherical_feature_vector(d8, m8; delta = 20, dims = 17)) <= 2048
+
+        @test (@inferred pairwise_legendre_sums(d8, m8, 17)) isa Vector{Float64}
+        @test (@inferred zonal_coefficients(17, 40.0)) isa Vector{Float64}
+
+        sig = NodeSignature{3,Float64}(1, :n, [SVector{3}(d) for d in d8], m8)
+        @test (@inferred feature_vector(sig; delta = 20, dims = 8)) isa Vector{Float64}
+        sig2 = NodeSignature{2,Float64}(1, :n, [SVector{2}(cos(t), sin(t)) for t = 1.0:4.0], collect(1.0:4.0))
+        @test (@inferred feature_vector(sig2; delta = 0.1, dims = 8)) isa Vector{Float64}
+    end
+
+    @testset "documented degeneracy: collinear reaction cancellation" begin
+        # a bare pinned 2-bar planar truss: each support reaction is exactly
+        # collinear with its lone member, so support signatures cancel to
+        # zero (see CLAUDE/PLAN). Pinned here as documented behavior.
+        mat = Material(200e6, 1.0, 80.0, 0.3)
+        sec = Section(mat, 1e-2)
+        rot = [true, true, true]
+        p1 = Node([0.0, 0.0, 0.0], vcat([false, false, false], rot))
+        p2 = Node([4.0, 0.0, 0.0], vcat([false, false, false], rot))
+        p3 = Node([2.0, 3.0, 0.0], vcat([true, true, false], rot))
+        pels = AbstractElement{Float64}[TrussElement(p1, p3, sec), TrussElement(p2, p3, sec)]
+        pmodel = Model([p1, p2, p3], pels,
+            AbstractLoad{Float64}[NodeForce(p3, [0.0, -50.0, 0.0])])
+        solve!(pmodel)
+
+        ha = HarmonicAnalysis2d(pmodel; dims = 8)
+        @test all(abs.(ha.featurevectors[1]) .< 1e-8) # support: cancelled
+        @test all(abs.(ha.featurevectors[2]) .< 1e-8) # support: cancelled
+        @test any(>(1e-3), ha.featurevectors[3])      # loaded apex: rich
     end
 end

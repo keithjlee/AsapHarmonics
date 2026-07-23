@@ -45,8 +45,9 @@ ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
 Clustering = "aaaa29a8-35af-508c-8bc3-b662a17a0fe5"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 MultivariateStats = "6f286f6a-111f-5878-ab1e-185364afe411"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [targets]
-test = ["AsapOptim", "ChainRulesCore", "Clustering", "ForwardDiff", "MultivariateStats", "Test", "Zygote"]
+test = ["AsapOptim", "ChainRulesCore", "Clustering", "ForwardDiff", "MultivariateStats", "StaticArrays", "Test", "Zygote"]
