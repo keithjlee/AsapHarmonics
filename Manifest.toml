@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "d08d06aa6a8c388a8cddab1514f8c1ab703d1cd4"
+project_hash = "a0617befb3debd39a0c55e9118ff94adfc5b2ff9"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -40,25 +40,27 @@ version = "1.11.0"
 deps = ["CommonSolve", "LinearAlgebra", "SparseArrays", "StaticArrays"]
 path = "../Asap"
 uuid = "763a8c06-ba23-41fc-b385-b3b57b52403a"
-version = "1.1.0"
+version = "1.1.1"
 
     [deps.Asap.extensions]
     AsapChainRulesExt = "ChainRulesCore"
     AsapEnzymeExt = ["Enzyme", "ChainRulesCore"]
+    AsapForwardDiffExt = "ForwardDiff"
     AsapLinearSolveExt = "LinearSolve"
     AsapMooncakeExt = ["Mooncake", "ChainRulesCore"]
 
     [deps.Asap.weakdeps]
     ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
     Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
+    ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
     LinearSolve = "7ed4a6bd-45f5-4d41-b270-4a48e9bafcae"
     Mooncake = "da2b9cff-9c12-43a0-ae48-6db2b0edb7d6"
 
 [[deps.AsapHarmonics]]
-deps = ["Asap", "FFTW", "FastSphericalHarmonics", "LinearAlgebra", "SparseArrays"]
+deps = ["Asap", "FFTW", "FastSphericalHarmonics", "LinearAlgebra", "SparseArrays", "SpecialFunctions"]
 path = "."
 uuid = "6cb0ef37-c0b4-4d5d-965f-0e79a17d1705"
-version = "1.0.0"
+version = "2.0.0-DEV"
 
 [[deps.BandedMatrices]]
 deps = ["ArrayLayouts", "FillArrays", "LinearAlgebra", "PrecompileTools"]

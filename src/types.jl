@@ -1,10 +1,24 @@
+"""
+    NodeForces(node, model, C, forces; δ = 20, normalize_forces = false,
+               store_function = false, resolution = 90)
+
+Per-node force signature: outward unit directions (columns of
+`forcepositions`) and signed magnitudes of all forces acting at `node` —
+incident member axial forces, applied `NodeLoad`s, and the support reaction.
+
+The sampled spherical signature `forcefunction` (for visualization and
+numeric cross-validation) is only computed when `store_function = true`, on
+the `sph_points(resolution + 1)` grid; it is otherwise left empty. Feature
+vectors do not need it — they are computed in closed form from
+`forcepositions`/`forcemagnitudes`.
+"""
 mutable struct NodeForces
     node::Node{Float64}
     forcepositions::Matrix{Float64}
     forcemagnitudes::Vector{Float64}
     forcefunction::Matrix{Float64}
 
-    function NodeForces(node::Node, model::Model, C::SparseMatrixCSC{Int64, Int64}, forces::Vector{Float64}; δ = 20, normalize_forces = false)
+    function NodeForces(node::Node, model::Model, C::SparseMatrixCSC{Int64, Int64}, forces::Vector{Float64}; δ = 20, normalize_forces = false, store_function = false, resolution = 90)
         i = node.index
 
         #indices of elements connected to node i
@@ -46,42 +60,66 @@ mutable struct NodeForces
         end
 
 
-        #make spherical gaussian function
-        sph = [getindex.(force_positions, 1) getindex.(force_positions, 2) getindex.(force_positions, 3) node_forces]
-        func = [spherical_gaussian(sph, t, p; δ = δ) for t in thetarange, p in phirange]
+        #sampled spherical signature (visualization / numeric validation only)
+        func = store_function ?
+            sampled_force_function(force_positions, node_forces; delta = δ, nlat = resolution + 1) :
+            Matrix{Float64}(undef, 0, 0)
 
         new(node, hcat(force_positions...), node_forces, func)
         
     end
 end
 
+"""
+    HarmonicAnalysis(model; delta = 20, dims = 16, normalize_forces = false,
+                     store_functions = false, resolution = 90)
+
+Spherical-harmonic shape-descriptor analysis of every node of a solved 3D
+`Model`: builds a [`NodeForces`](@ref) signature per node and computes its
+rotation-invariant feature vector (degrees `l = 0:dims-1`) in closed form via
+[`spherical_feature_vector`](@ref).
+
+`delta` is the sharpness of the Gaussian force bumps (each bump approaches a
+Dirac spike as `delta → ∞`). With `store_functions = true` the sampled
+spherical signatures are also retained in `forcefunctions` for visualization.
+"""
 mutable struct HarmonicAnalysis
     model::Model{Float64}
     nodeforces::Vector{NodeForces}
     forcefunctions::Vector{Matrix{Float64}}
     featurevectors::Vector{Vector{Float64}}
 
-    function HarmonicAnalysis(model::Model; delta = 20, dims = 16, normalize_forces = false)
+    function HarmonicAnalysis(model::Model; delta = 20, dims = 16, normalize_forces = false, store_functions = false, resolution = 90)
         C = connectivity(model)
         forces = [axial_force(model.results, el) for el in model.elements]
 
-        nodeforces = [NodeForces(node, model, C, forces; δ = delta, normalize_forces = normalize_forces) for node in model.nodes]
+        nodeforces = [NodeForces(node, model, C, forces; δ = delta, normalize_forces = normalize_forces, store_function = store_functions, resolution = resolution) for node in model.nodes]
 
         forcefunctions = getproperty.(nodeforces, :forcefunction)
 
-        featurevectors = spherical_feature_vector.(forcefunctions; dims = dims)
+        featurevectors = [spherical_feature_vector(nf.forcepositions, nf.forcemagnitudes; delta = delta, dims = dims) for nf in nodeforces]
 
         new(model, nodeforces, forcefunctions, featurevectors)
     end
 end
 
+"""
+    NodeForces2d(node, model, C, forces; δ = 0.1, n = 90,
+                 normalize_forces = false, store_function = false)
+
+Per-node planar force signature: unit directions and signed magnitudes of all
+forces acting at `node` in the XY plane (member axial forces via
+`local_frame`, applied loads, reactions — compression/tension encoded by
+sign and direction flip). The `n`-point sampled circular signature
+`forcefunction` is only computed when `store_function = true`.
+"""
 mutable struct NodeForces2d
     node::Node{Float64}
     forcepositions::Vector{Vector{Float64}}
     forcemagnitudes::Vector{Float64}
     forcefunction::Vector{Float64}
 
-    function NodeForces2d(node::Node, model::Model, C::SparseMatrixCSC{Int64, Int64}, forces::Vector{Float64}; δ = 0.1, n = 90, normalize_forces = false)
+    function NodeForces2d(node::Node, model::Model, C::SparseMatrixCSC{Int64, Int64}, forces::Vector{Float64}; δ = 0.1, n = 90, normalize_forces = false, store_function = false)
         i = node.index
 
         #indices of elements connected to node i
@@ -143,29 +181,43 @@ mutable struct NodeForces2d
             force_positions = [force_positions; external_load_positions]
         end
 
-        #force functions
-        force_function = circular_gaussian(force_positions, node_forces, δ, n)
-            
+        #sampled circular signature (visualization / numeric validation only)
+        force_function = store_function ? circular_gaussian(force_positions, node_forces, δ, n) : Float64[]
+
         #return
         new(node, force_positions, node_forces, force_function)
     end
 end
 
+"""
+    HarmonicAnalysis2d(model; delta = 0.1, n = 90, dims = 16,
+                       normalize_forces = false, store_functions = false)
+
+Fourier shape-descriptor analysis of every node of a solved **planar (XY)**
+`Model`: builds a [`NodeForces2d`](@ref) signature per node and computes its
+rotation-invariant feature vector (frequencies `k = 0:dims-1`) in closed form
+via [`circular_feature_vector`](@ref).
+
+`delta` is the angular width σ of the Gaussian force bumps. With
+`store_functions = true` the `n`-point sampled circular signatures are also
+retained in `forcefunctions` for visualization (note: a raw `rfft` of those
+samples is ≈ `n×` the closed-form feature values).
+"""
 mutable struct HarmonicAnalysis2d
     model::Model{Float64}
     nodeforces::Vector{NodeForces2d}
     forcefunctions::Vector{Vector{Float64}}
     featurevectors::Vector{Vector{Float64}}
 
-    function HarmonicAnalysis2d(model::Model; delta = 0.1, n = 90, dims = 16, normalize_forces = false)
+    function HarmonicAnalysis2d(model::Model; delta = 0.1, n = 90, dims = 16, normalize_forces = false, store_functions = false)
         C = connectivity(model)
         forces = [axial_force(model.results, el) for el in model.elements]
 
-        nodeforces = [NodeForces2d(node, model, C, forces; δ = delta, n = n, normalize_forces = normalize_forces) for node in model.nodes]
+        nodeforces = [NodeForces2d(node, model, C, forces; δ = delta, n = n, normalize_forces = normalize_forces, store_function = store_functions) for node in model.nodes]
 
         forcefunctions = getproperty.(nodeforces, :forcefunction)
 
-        featurevectors = [circular_feature_vector(ff; dims = dims) for ff in forcefunctions]
+        featurevectors = [circular_feature_vector(nf.forcepositions, nf.forcemagnitudes; sigma = delta, dims = dims) for nf in nodeforces]
 
         new(model, nodeforces, forcefunctions, featurevectors)
     end
