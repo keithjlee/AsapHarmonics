@@ -1,0 +1,17 @@
+[deps]
+Asap = "763a8c06-ba23-41fc-b385-b3b57b52403a"
+AsapHarmonics = "6cb0ef37-c0b4-4d5d-965f-0e79a17d1705"
+AsapOptim = "d81720e7-9d76-4c66-a69e-8f07ca321cc4"
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+Clustering = "aaaa29a8-35af-508c-8bc3-b662a17a0fe5"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+MultivariateStats = "6f286f6a-111f-5878-ab1e-185364afe411"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
+
+[sources]
+Asap = {path = "../../Asap"}
+AsapHarmonics = {path = ".."}
+AsapOptim = {path = "../../AsapOptim"}

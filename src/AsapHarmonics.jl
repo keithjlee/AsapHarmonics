@@ -10,7 +10,7 @@ export zonal_coefficients, pairwise_legendre_sums
 
 include("functions.jl")
 export spherical_gaussian, circular_gaussian, sampled_force_function
-export make_xsphere, make_ysphere, make_zsphere
+export make_xsphere, make_ysphere, make_zsphere, sphere_points
 
 include("types.jl")
 export NodeSignature, feature_vector

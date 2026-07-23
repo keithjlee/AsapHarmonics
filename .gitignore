@@ -4,3 +4,4 @@ scratch.jl
 # personal working docs — local only
 CLAUDE.md
 PLAN.md
+examples/Manifest.toml

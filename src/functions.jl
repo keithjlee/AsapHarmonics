@@ -105,3 +105,13 @@ end
 make_xsphere(thetas::AbstractVector, phis::AbstractVector) = [cos(ϕ) * sin(θ) for θ in thetas, ϕ in phis]
 make_ysphere(thetas::AbstractVector, phis::AbstractVector) = [sin(ϕ) * sin(θ) for θ in thetas, ϕ in phis]
 make_zsphere(thetas::AbstractVector, phis::AbstractVector) = [cos(θ) for θ in thetas, ϕ in phis]
+
+"""
+    sphere_points(nlat) -> (Θ, Φ)
+
+The latitude/longitude sample vectors of the `nlat × (2nlat - 1)` grid used by
+[`sampled_force_function`](@ref) (i.e. `FastSphericalHarmonics.sph_points`) —
+pair with `make_xsphere`/`make_ysphere`/`make_zsphere` to visualize sampled
+signatures as radially-scaled sphere surfaces.
+"""
+sphere_points(nlat::Integer) = sph_points(nlat)
