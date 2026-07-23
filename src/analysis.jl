@@ -175,3 +175,30 @@ matrix — the demand-space visualization of Lee, Danhaive & Mueller (2022).
 a package extension. Returns a `maxoutdim × n_nodes` coordinate matrix.
 """
 function embed_nodes end
+
+"""
+    harmonic_params(p; delta = 20, dims = 16, dimension = 3)
+
+Precompile the constant (non-differentiable) data of a shape-descriptor
+evaluation over an `AsapOptim.OptParams`: per-node incident elements and
+orientation signs, applied-load bumps, support flags, and the applied-load
+matrix for equilibrium reaction recovery. Feed the result to
+[`feature_vectors`](@ref), [`soft_complexity`](@ref), and
+[`complexity`](@ref). **Requires AsapOptim.jl** (`using AsapOptim`) —
+implemented in a package extension.
+"""
+function harmonic_params end
+
+"""
+    feature_vectors(res, p, hp)
+    feature_vectors(x, p, hp)
+
+Fully differentiable nodal feature vectors of a design evaluation: member
+directions from the evaluated positions (`res.X` + incidence), member forces
+via `AsapOptim.axial_force`, and support reactions recovered from nodal
+equilibrium (no extra solve). `res = solve_structure(x, p)`; `hp` from
+[`harmonic_params`](@ref). Gradients flow with ForwardDiff or Zygote
+(`soft_complexity(x, p, hp)` is the intended smooth objective).
+**Requires AsapOptim.jl** — implemented in a package extension.
+"""
+function feature_vectors end

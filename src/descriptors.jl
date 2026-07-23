@@ -97,6 +97,14 @@ Mueller (2022); Funk–Hecke: Müller, *Spherical Harmonics* (1966), Atkinson &
 Han (2012); von Mises–Fisher kernel: Fisher (1953), Mardia & Jupp (2000);
 Bessel expansion: DLMF §10.60.7.
 """
+# NaN-safe root of a band energy. Sₗ ≥ 0 in exact arithmetic, but roundoff
+# can leave it slightly negative — in particular the l = 1 (k = 1) band of a
+# COMPLETE nodal signature is the squared resultant force, which is ~0 at
+# every equilibrated node. A branch (not a clamp) keeps AD clean: clamping to
+# exactly 0.0 feeds sqrt a zero with nonzero perturbation → 0/0 = NaN partials
+# under ForwardDiff, while the zero branch has the correct zero derivative.
+_band_norm(s) = s > 0 ? sqrt(s) : zero(s)
+
 function spherical_feature_vector(
     directions::AbstractVector{<:AbstractVector},
     magnitudes::AbstractVector;
@@ -110,8 +118,7 @@ function spherical_feature_vector(
     λ = zonal_coefficients(dims, 2delta)
     S = pairwise_legendre_sums(directions, magnitudes, dims)
 
-    # Sₗ ≥ 0 in exact arithmetic (band energy); clamp roundoff negatives
-    return [λ[l+1] * sqrt(max((2l + 1) / (4π) * S[l+1], zero(S[l+1]))) for l = 0:dims-1]
+    return [λ[l+1] * _band_norm((2l + 1) / (4π) * S[l+1]) for l = 0:dims-1]
 end
 
 function spherical_feature_vector(directions::AbstractMatrix, magnitudes::AbstractVector; kwargs...)
@@ -161,7 +168,9 @@ function circular_feature_vector(
             a += f * c
             b += f * s
         end
-        sigma / sqrt(2π) * exp(-(sigma * k)^2 / 2) * sqrt(a^2 + b^2)
+        # _band_norm: the k = 1 band of a complete signature is the resultant
+        # force, ~0 at equilibrated nodes (see the 3D note above)
+        sigma / sqrt(2π) * exp(-(sigma * k)^2 / 2) * _band_norm(a^2 + b^2)
     end
 end
 

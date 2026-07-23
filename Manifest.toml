@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "74b5b240e10cfd426ca401d547af7e2108acfd18"
+project_hash = "d03fb2be4040375f1c92ca32315be8a6480d9822"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -63,10 +63,14 @@ uuid = "6cb0ef37-c0b4-4d5d-965f-0e79a17d1705"
 version = "2.0.0-DEV"
 
     [deps.AsapHarmonics.extensions]
+    AsapHarmonicsChainRulesExt = "ChainRulesCore"
     AsapHarmonicsClusteringExt = "Clustering"
     AsapHarmonicsMDSExt = "MultivariateStats"
+    AsapHarmonicsOptimExt = "AsapOptim"
 
     [deps.AsapHarmonics.weakdeps]
+    AsapOptim = "d81720e7-9d76-4c66-a69e-8f07ca321cc4"
+    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
     Clustering = "aaaa29a8-35af-508c-8bc3-b662a17a0fe5"
     MultivariateStats = "6f286f6a-111f-5878-ab1e-185364afe411"
 

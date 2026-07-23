@@ -328,4 +328,76 @@ const MAGS = [2.0, -1.5, 0.8, 3.0, -2.2]
         Demb = [norm(E[:, i] - E[:, j]) for i = 1:n, j = 1:n]
         @test maximum(abs.(Demb .- D)) / maximum(D) < 0.5
     end
+
+    @testset "reverse-mode AD (Zygote rrule)" begin
+        using Zygote
+
+        # magnitudes gradient: rrule vs ForwardDiff
+        f_sph(m) = sum(spherical_feature_vector(DIRS, m; delta = 20, dims = 8))
+        @test isapprox(Zygote.gradient(f_sph, MAGS)[1], ForwardDiff.gradient(f_sph, MAGS); rtol = 1e-10)
+
+        # direction gradient (exercises d̄ including the j = k term and the
+        # normalization chain)
+        function f_dir(v)
+            dirs = [i == 1 ? normalize(v) : convert(Vector{eltype(v)}, DIRS[i]) for i in eachindex(DIRS)]
+            return sum(spherical_feature_vector(dirs, MAGS; delta = 20, dims = 8))
+        end
+        v0 = [0.3, -0.2, 0.9]
+        @test isapprox(Zygote.gradient(f_dir, v0)[1], ForwardDiff.gradient(f_dir, v0); rtol = 1e-10)
+
+        # 2D descriptor under Zygote
+        θs = [0.2, 1.7, 3.5, 5.0]
+        mags = [1.0, -2.0, 0.5, 1.5]
+        f_circ(m) = sum(circular_feature_vector(θs, m; sigma = 0.1, dims = 8))
+        @test isapprox(Zygote.gradient(f_circ, mags)[1], ForwardDiff.gradient(f_circ, mags); rtol = 1e-10)
+    end
+
+    @testset "AsapOptim integration" begin
+        using AsapOptim, Zygote
+
+        model = small_truss()
+        vars = [
+            SpatialVariable(model.nodes[4], 0.0, -1.0, 1.0, :Z),
+            SpatialVariable(model.nodes[4], 0.0, -1.0, 1.0, :X),
+            SpatialVariable(model.nodes[3], 0.0, -1.0, 1.0, :Y),
+        ]
+        p = OptParams(model, vars)
+        hp = harmonic_params(p; delta = 20, dims = 8)
+        x0 = copy(p.values)
+
+        # parity with the model-facing pipeline at the base design
+        fvs = feature_vectors(x0, p, hp)
+        ha = HarmonicAnalysis(model; delta = 20, dims = 8)
+        @test length(fvs) == length(ha.featurevectors)
+        for (a, b) in zip(fvs, ha.featurevectors)
+            @test isapprox(a, b; rtol = 1e-6, atol = 1e-8)
+        end
+
+        # end-to-end gradients: Zygote vs ForwardDiff vs central differences
+        obj(x) = soft_complexity(x, p, hp)
+        g_zy = Zygote.gradient(obj, x0)[1]
+        g_fw = ForwardDiff.gradient(obj, x0)
+        @test isapprox(g_zy, g_fw; rtol = 1e-6)
+
+        h = 1e-6
+        g_num = [
+            (obj(x0 + h * I(3)[:, i]) - obj(x0 - h * I(3)[:, i])) / 2h for i = 1:3
+        ]
+        @test isapprox(g_fw, g_num; rtol = 1e-4)
+        @test norm(g_zy) > 0
+
+        # a short gradient descent reduces the smooth complexity objective
+        x = copy(x0)
+        c0 = obj(x0)
+        for _ = 1:30
+            g = Zygote.gradient(obj, x)[1]
+            x -= 0.005 * g / (norm(g) + 1e-12)
+            x = clamp.(x, p.lb, p.ub)
+        end
+        @test obj(x) < c0
+
+        # exact bounding-sphere complexity for reporting
+        @test complexity(x0, p, hp) > 0
+        @test soft_complexity(x0, p, hp) <= 2 * complexity(x0, p, hp) + 1e-10
+    end
 end

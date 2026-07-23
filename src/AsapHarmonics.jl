@@ -20,5 +20,6 @@ include("analysis.jl")
 export feature_matrix, distance_matrix
 export bounding_sphere, complexity, soft_complexity, cluster_complexities
 export cluster_nodes, embed_nodes
+export harmonic_params, feature_vectors
 
 end # module AsapHarmonics
