@@ -51,7 +51,7 @@ println("initial exact complexity: ", round(complexity(x0, p, hp), digits = 3))
 
 x = copy(x0)
 history = [obj(x)]
-steps = 150
+steps = 300
 η = 0.02
 
 for _ = 1:steps
@@ -105,27 +105,43 @@ end
 # The point of the exercise: after optimization the nodal feature vectors
 # huddle closer together — nodes have become more similar, and fewer unique
 # connections cover the design.
+#
+# MDS coordinates are only meaningful up to rotation/reflection/translation,
+# so two separate embeddings cannot be compared point to point. Instead, BOTH
+# feature-vector sets are pooled into one distance matrix and embedded
+# JOINTLY: all base-vs-base, optimized-vs-optimized, AND base-vs-optimized
+# distances shape the shared space, so the two clouds sit where they actually
+# live relative to each other.
 
 ha0 = HarmonicAnalysis(model_base; delta = 20, dims = 16)
 ha1 = HarmonicAnalysis(model_opt; delta = 20, dims = 16)
 
 begin
     using MultivariateStats
-    fig = Figure(size = (900, 440))
-    for (j, (ha_j, label)) in enumerate(zip((ha0, ha1), ("BASE", "OPTIMIZED")))
-        E = embed_nodes(ha_j; maxoutdim = 2)
-        ax = Axis(
-            fig[1, j];
-            title = "$label — complexity $(round(complexity(ha_j), digits = 2))",
-            xlabel = "dim 1", ylabel = "dim 2",
-            backgroundcolor = RGBf(0.96, 0.96, 0.96), aspect = DataAspect(),
-        )
-        scatter!(
-            ax, Point2f.(eachcol(E));
-            color = TENSION_BLUE, strokecolor = :black, strokewidth = 1, markersize = 8,
-        )
-    end
-    linkaxes!(fig.content[1], fig.content[2])
+
+    nn = length(ha0.featurevectors)
+    E = embed_nodes(vcat(ha0.featurevectors, ha1.featurevectors); maxoutdim = 2)
+
+    fig = Figure(size = (760, 480))
+    ax = Axis(
+        fig[1, 1];
+        title = "DEMAND SPACE (joint embedding)",
+        xlabel = "dim 1", ylabel = "dim 2",
+        backgroundcolor = RGBf(0.96, 0.96, 0.96), aspect = DataAspect(),
+    )
+
+    scatter!(
+        ax, Point2f.(eachcol(E[:, 1:nn]));
+        color = (:gray60, 0.9), strokecolor = :black, strokewidth = 0.5, markersize = 8,
+        label = "base — complexity $(round(complexity(ha0), digits = 2))",
+    )
+    scatter!(
+        ax, Point2f.(eachcol(E[:, nn+1:end]));
+        color = TENSION_BLUE, strokecolor = :black, strokewidth = 0.5, markersize = 8,
+        label = "optimized — complexity $(round(complexity(ha1), digits = 2))",
+    )
+    axislegend(ax; position = :rb, framevisible = false)
+
     savefig("optimization_demandspace", fig)
 end
 
