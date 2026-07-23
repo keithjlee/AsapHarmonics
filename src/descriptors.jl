@@ -98,12 +98,16 @@ Han (2012); von Mises–Fisher kernel: Fisher (1953), Mardia & Jupp (2000);
 Bessel expansion: DLMF §10.60.7.
 """
 # NaN-safe root of a band energy. Sₗ ≥ 0 in exact arithmetic, but roundoff
-# can leave it slightly negative — in particular the l = 1 (k = 1) band of a
-# COMPLETE nodal signature is the squared resultant force, which is ~0 at
-# every equilibrated node. A branch (not a clamp) keeps AD clean: clamping to
-# exactly 0.0 feeds sqrt a zero with nonzero perturbation → 0/0 = NaN partials
-# under ForwardDiff, while the zero branch has the correct zero derivative.
-_band_norm(s) = s > 0 ? sqrt(s) : zero(s)
+# can leave it slightly negative or exactly zero — in particular the l = 1
+# (k = 1) band of a COMPLETE nodal signature is the squared resultant force,
+# which is ~0 at every equilibrated node. A branch (not a clamp) keeps AD
+# clean: clamping to exactly 0.0 feeds sqrt a zero with nonzero perturbation
+# → 0/0 = NaN partials under ForwardDiff, while the zero branch has the
+# correct zero derivative. The threshold is a subnormal floor rather than 0
+# because ForwardDiff (≥ v1) breaks value TIES in comparisons by the
+# perturbation direction — `Dual(0.0, 1.0) > 0` is true — which would send an
+# exactly-zero energy down the sqrt branch anyway.
+_band_norm(s) = s > 1e-306 ? sqrt(s) : zero(s)
 
 function spherical_feature_vector(
     directions::AbstractVector{<:AbstractVector},

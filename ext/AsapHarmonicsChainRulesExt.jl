@@ -11,11 +11,24 @@
 module AsapHarmonicsChainRulesExt
 
 using AsapHarmonics, ChainRulesCore, LinearAlgebra
-import AsapHarmonics: pairwise_legendre_sums, zonal_coefficients
+import AsapHarmonics: pairwise_legendre_sums, zonal_coefficients, _constmul, _mulconst
 
 # constant hyperparameter data by design (documented): κ is never a
 # differentiation target, and besselix must not be traced
 ChainRulesCore.@non_differentiable zonal_coefficients(::Any, ::Any)
+
+# products with constant selection/aggregation/incidence operators: no
+# cotangent for the constant matrix (the generic mul rrule would materialize
+# a dense outer product for it)
+function ChainRulesCore.rrule(::typeof(_constmul), A::AbstractMatrix, x)
+    _constmul_pullback(Δ) = (NoTangent(), NoTangent(), A' * unthunk(Δ))
+    return A * x, _constmul_pullback
+end
+
+function ChainRulesCore.rrule(::typeof(_mulconst), X, A::AbstractVecOrMat)
+    _mulconst_pullback(Δ) = (NoTangent(), unthunk(Δ) * A', NoTangent())
+    return X * A, _mulconst_pullback
+end
 
 function ChainRulesCore.rrule(
     ::typeof(pairwise_legendre_sums),

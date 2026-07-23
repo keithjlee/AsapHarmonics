@@ -133,6 +133,14 @@ function soft_complexity(fvs::AbstractVector{<:AbstractVector})
     return sqrt(sum(sum(abs2, fv - centroid) for fv in fvs) / n)
 end
 
+# matrix form (one column per node) — fully batched, the reverse-AD-friendly
+# path used by the AsapOptim extension's objective
+function soft_complexity(F::AbstractMatrix)
+    n = size(F, 2)
+    centroid = sum(F; dims = 2) ./ n
+    return sqrt(sum(abs2, F .- centroid) / n)
+end
+
 soft_complexity(ha::HarmonicAnalysis) = soft_complexity(ha.featurevectors)
 
 """
@@ -175,6 +183,14 @@ matrix — the demand-space visualization of Lee, Danhaive & Mueller (2022).
 a package extension. Returns a `maxoutdim × n_nodes` coordinate matrix.
 """
 function embed_nodes end
+
+# products with a CONSTANT matrix (sparse selection/aggregation/incidence
+# operators). Reverse-mode rules in the ChainRules extension return NoTangent
+# for the constant operand — the generic mul rrule would otherwise materialize
+# a dense outer-product cotangent for it (n × n_pairs and friends) only to
+# throw it away, dominating gradient allocations.
+_constmul(A::AbstractMatrix, x) = A * x   # A constant
+_mulconst(X, A::AbstractVecOrMat) = X * A # A constant
 
 """
     harmonic_params(p; delta = 20, dims = 16, dimension = 3)

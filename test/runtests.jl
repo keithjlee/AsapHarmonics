@@ -400,6 +400,22 @@ const MAGS = [2.0, -1.5, 0.8, 3.0, -2.2]
         # exact bounding-sphere complexity for reporting
         @test complexity(x0, p, hp) > 0
         @test soft_complexity(x0, p, hp) <= 2 * complexity(x0, p, hp) + 1e-10
+
+        # matrix and vector-of-vectors soft_complexity agree
+        @test soft_complexity(reduce(hcat, fvs)) ≈ soft_complexity(fvs)
+
+        # 2D (dimension = 2) parity against HarmonicAnalysis2d
+        pmodel = planar_truss(0.0)
+        p2 = OptParams(pmodel, [SpatialVariable(pmodel.nodes[3], 0.0, -1.0, 1.0, :Y)])
+        hp2 = harmonic_params(p2; delta = 0.1, dims = 8, dimension = 2)
+        fvs2 = feature_vectors(copy(p2.values), p2, hp2)
+        ha2 = HarmonicAnalysis2d(pmodel; delta = 0.1, dims = 8)
+        for (a, b) in zip(fvs2, ha2.featurevectors)
+            @test isapprox(a, b; rtol = 1e-6, atol = 1e-8)
+        end
+        g2 = Zygote.gradient(x -> soft_complexity(x, p2, hp2), copy(p2.values))[1]
+        g2f = ForwardDiff.gradient(x -> soft_complexity(x, p2, hp2), copy(p2.values))
+        @test isapprox(g2, g2f; rtol = 1e-6)
     end
 
     @testset "regression: pinned descriptor values" begin
