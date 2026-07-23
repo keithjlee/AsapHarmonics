@@ -1,6 +1,6 @@
 module AsapHarmonics
 
-using Asap, LinearAlgebra, SparseArrays
+using Asap, LinearAlgebra, SparseArrays, StaticArrays
 using FastSphericalHarmonics, FFTW
 using SpecialFunctions: besselix
 
@@ -13,7 +13,7 @@ export spherical_gaussian, circular_gaussian, sampled_force_function
 export make_xsphere, make_ysphere, make_zsphere
 
 include("types.jl")
-export NodeForces, HarmonicAnalysis
-export NodeForces2d, HarmonicAnalysis2d
+export NodeSignature, feature_vector
+export HarmonicAnalysis, HarmonicAnalysis2d
 
 end # module AsapHarmonics

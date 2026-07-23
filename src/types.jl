@@ -1,225 +1,177 @@
+# Model-facing layer: extract per-node force signatures from a solved Asap
+# model and compute their closed-form feature vectors. The 2D (circle) and 3D
+# (sphere) analyses share one implementation, parameterized by D.
+#
+# Sign convention (uniform across D):
+#   - incident members: signed axial force (tension +, compression -) at the
+#     outward unit member direction
+#   - applied point forces and support reactions: magnitude |P| at direction
+#     P/|P| (equivalent to a tension member pointing along the force)
+# This convention is equivariant: rotating the whole problem (geometry and
+# loads together) rotates every signature rigidly, so feature vectors are
+# unchanged.
+
 """
-    NodeForces(node, model, C, forces; δ = 20, normalize_forces = false,
-               store_function = false, resolution = 90)
+    NodeSignature{D,T}
 
-Per-node force signature: outward unit directions (columns of
-`forcepositions`) and signed magnitudes of all forces acting at `node` —
-incident member axial forces, applied `NodeLoad`s, and the support reaction.
+Force signature of a single node on the circle (`D = 2`) or sphere (`D = 3`):
+unit `directions` and signed `magnitudes` of every force acting at the node —
+incident member axial forces, applied `NodeForce`s, and the support reaction.
+`index`/`id` identify the node in its model.
 
-The sampled spherical signature `forcefunction` (for visualization and
-numeric cross-validation) is only computed when `store_function = true`, on
-the `sph_points(resolution + 1)` grid; it is otherwise left empty. Feature
-vectors do not need it — they are computed in closed form from
-`forcepositions`/`forcemagnitudes`.
+Built from a solved model via
+`NodeSignature{D}(node, model, C, forces; normalize_forces = false)` where `C`
+is `connectivity(model)` and `forces` the member axial forces;
+`normalize_forces = true` replaces every magnitude by its sign. Usually
+constructed in bulk by [`HarmonicAnalysis`](@ref) / [`HarmonicAnalysis2d`](@ref).
 """
-mutable struct NodeForces
-    node::Node{Float64}
-    forcepositions::Matrix{Float64}
-    forcemagnitudes::Vector{Float64}
-    forcefunction::Matrix{Float64}
+struct NodeSignature{D,T}
+    index::Int
+    id::Symbol
+    directions::Vector{SVector{D,T}}
+    magnitudes::Vector{T}
+end
 
-    function NodeForces(node::Node, model::Model, C::SparseMatrixCSC{Int64, Int64}, forces::Vector{Float64}; δ = 20, normalize_forces = false, store_function = false, resolution = 90)
-        i = node.index
+_project(v::SVector{3,T}, ::Val{3}) where {T} = v
+_project(v::SVector{3,T}, ::Val{2}) where {T} = SVector{2,T}(v[1], v[2])
 
-        #indices of elements connected to node i
-        i_connected = findall(.!iszero.(C[:, i]))
+function NodeSignature{D}(
+    node::Node,
+    model::Model,
+    C::SparseMatrixCSC{<:Integer},
+    forces::AbstractVector;
+    normalize_forces::Bool = false,
+) where {D}
+    D == 2 || D == 3 || throw(ArgumentError("NodeSignature dimension must be 2 or 3, got $D"))
 
-        #-1 if node i is start point, 1 if node i is end point
-        start_end = vec(C[:, i][i_connected])
+    i = node.index
+    T = promote_type(eltype(node.position), eltype(forces))
 
-        #external forces
-        # external_loads = getproperty.(model.loads[node.loadIDs], :value)
-        external_loads = [load.value for load in model.loads if load isa NodeLoad && load.node.index == i]
+    i_connected = findall(!iszero, C[:, i])
+    factors = Vector(C[:, i][i_connected])
 
+    directions = Vector{SVector{D,T}}()
+    magnitudes = Vector{T}()
 
-        #reaction if applicable
-        rxn3 = collect(reaction(model.results, node)[1:3])
-        if !iszero(norm(rxn3))
-            push!(external_loads, rxn3)
-        end
-
-        if normalize_forces
-            external_loads = normalize.(external_loads)
-        end
-
-        #force values
-        node_forces = forces[i_connected]
-        
-        if normalize_forces
-            node_forces ./= abs.(node_forces)
-        end
-
-        if !isempty(external_loads)
-            node_forces = [node_forces; norm.(external_loads)]
-        end
-
-        #force positions
-        force_positions = [-normalize(e.nodeEnd.position - e.nodeStart.position) .* factor for (e, factor) in zip(model.elements[i_connected], start_end)]
-        if !isempty(external_loads)
-            force_positions = [force_positions; normalize.(external_loads)]
-        end
-
-
-        #sampled spherical signature (visualization / numeric validation only)
-        func = store_function ?
-            sampled_force_function(force_positions, node_forces; delta = δ, nlat = resolution + 1) :
-            Matrix{Float64}(undef, 0, 0)
-
-        new(node, hcat(force_positions...), node_forces, func)
-        
+    # incident members: signed axial force at the outward direction
+    for (e, factor) in zip(model.elements[i_connected], factors)
+        d = -normalize(e.nodeEnd.position - e.nodeStart.position) * factor
+        push!(directions, normalize(_project(SVector{3,T}(d), Val(D))))
     end
+    append!(magnitudes, forces[i_connected])
+
+    # applied point forces: |P| at P̂
+    for load in model.loads
+        (load isa NodeForce && load.node.index == i) || continue
+
+        P = _project(SVector{3,T}(load.value), Val(D))
+        m = norm(P)
+        iszero(m) && continue
+
+        push!(directions, P / m)
+        push!(magnitudes, m)
+    end
+
+    # support reaction (translational components): |R| at R̂
+    r = reaction(model.results, node)
+    R = _project(SVector{3,T}(r[1], r[2], r[3]), Val(D))
+    mR = norm(R)
+    if !iszero(mR)
+        push!(directions, R / mR)
+        push!(magnitudes, mR)
+    end
+
+    normalize_forces && (magnitudes = sign.(magnitudes))
+
+    return NodeSignature{D,T}(i, node.id, directions, magnitudes)
 end
 
 """
-    HarmonicAnalysis(model; delta = 20, dims = 16, normalize_forces = false,
-                     store_functions = false, resolution = 90)
+    feature_vector(signature::NodeSignature; delta, dims = 16)
+
+Closed-form rotation-invariant feature vector of a node signature — dispatches
+to [`spherical_feature_vector`](@ref) (`D = 3`, `delta` defaults to 20) or
+[`circular_feature_vector`](@ref) (`D = 2`, where `delta` is the angular
+Gaussian width σ, defaulting to 0.1).
+"""
+feature_vector(sig::NodeSignature{3}; delta::Real = 20, dims::Integer = 16) =
+    spherical_feature_vector(sig.directions, sig.magnitudes; delta = delta, dims = dims)
+
+feature_vector(sig::NodeSignature{2}; delta::Real = 0.1, dims::Integer = 16) =
+    circular_feature_vector(sig.directions, sig.magnitudes; sigma = delta, dims = dims)
+
+# sampled signatures (visualization / numeric cross-validation), on demand
+sampled_force_function(sig::NodeSignature{3}; delta::Real = 20, nlat::Integer = 91) =
+    sampled_force_function(sig.directions, sig.magnitudes; delta = delta, nlat = nlat)
+
+circular_gaussian(sig::NodeSignature{2}, σ::Real = 0.1, n::Integer = 90) =
+    circular_gaussian(sig.directions, sig.magnitudes, σ, n)
+
+"""
+    HarmonicAnalysis{D,T}
+
+Shape-descriptor analysis of every node of a solved model: `signatures` (one
+[`NodeSignature{D,T}`](@ref) per node, in model order) and their
+rotation-invariant `featurevectors` (each of length `dims`, degrees/frequencies
+`0:dims-1`), plus the kernel parameter `delta` used.
+
+Construct with [`HarmonicAnalysis(model)`](@ref) (3D, spherical harmonics) or
+[`HarmonicAnalysis2d(model)`](@ref) (planar, Fourier).
+"""
+struct HarmonicAnalysis{D,T}
+    signatures::Vector{NodeSignature{D,T}}
+    featurevectors::Vector{Vector{T}}
+    delta::Float64
+    dims::Int
+end
+
+function _harmonic_analysis(
+    ::Val{D},
+    model::Model,
+    delta::Real,
+    dims::Integer,
+    normalize_forces::Bool,
+) where {D}
+    C = connectivity(model)
+    forces = [axial_force(model.results, el) for el in model.elements]
+
+    signatures = [
+        NodeSignature{D}(node, model, C, forces; normalize_forces = normalize_forces) for
+        node in model.nodes
+    ]
+    featurevectors = [feature_vector(sig; delta = delta, dims = dims) for sig in signatures]
+
+    return HarmonicAnalysis(signatures, featurevectors, Float64(delta), Int(dims))
+end
+
+"""
+    HarmonicAnalysis(model; delta = 20, dims = 16, normalize_forces = false)
 
 Spherical-harmonic shape-descriptor analysis of every node of a solved 3D
-`Model`: builds a [`NodeForces`](@ref) signature per node and computes its
-rotation-invariant feature vector (degrees `l = 0:dims-1`) in closed form via
-[`spherical_feature_vector`](@ref).
-
-`delta` is the sharpness of the Gaussian force bumps (each bump approaches a
-Dirac spike as `delta → ∞`). With `store_functions = true` the sampled
-spherical signatures are also retained in `forcefunctions` for visualization.
+`Model`. `delta` is the sharpness of the Gaussian force bumps (each bump
+approaches a Dirac spike as `delta → ∞`); `dims` is the feature-vector length
+(spherical-harmonic degrees `l = 0:dims-1`); `normalize_forces = true`
+discards force magnitudes and keeps only orientations and tension/compression
+signs.
 """
-mutable struct HarmonicAnalysis
-    model::Model{Float64}
-    nodeforces::Vector{NodeForces}
-    forcefunctions::Vector{Matrix{Float64}}
-    featurevectors::Vector{Vector{Float64}}
-
-    function HarmonicAnalysis(model::Model; delta = 20, dims = 16, normalize_forces = false, store_functions = false, resolution = 90)
-        C = connectivity(model)
-        forces = [axial_force(model.results, el) for el in model.elements]
-
-        nodeforces = [NodeForces(node, model, C, forces; δ = delta, normalize_forces = normalize_forces, store_function = store_functions, resolution = resolution) for node in model.nodes]
-
-        forcefunctions = getproperty.(nodeforces, :forcefunction)
-
-        featurevectors = [spherical_feature_vector(nf.forcepositions, nf.forcemagnitudes; delta = delta, dims = dims) for nf in nodeforces]
-
-        new(model, nodeforces, forcefunctions, featurevectors)
-    end
-end
+HarmonicAnalysis(model::Model; delta::Real = 20, dims::Integer = 16, normalize_forces::Bool = false) =
+    _harmonic_analysis(Val(3), model, delta, dims, normalize_forces)
 
 """
-    NodeForces2d(node, model, C, forces; δ = 0.1, n = 90,
-                 normalize_forces = false, store_function = false)
-
-Per-node planar force signature: unit directions and signed magnitudes of all
-forces acting at `node` in the XY plane (member axial forces via
-`local_frame`, applied loads, reactions — compression/tension encoded by
-sign and direction flip). The `n`-point sampled circular signature
-`forcefunction` is only computed when `store_function = true`.
-"""
-mutable struct NodeForces2d
-    node::Node{Float64}
-    forcepositions::Vector{Vector{Float64}}
-    forcemagnitudes::Vector{Float64}
-    forcefunction::Vector{Float64}
-
-    function NodeForces2d(node::Node, model::Model, C::SparseMatrixCSC{Int64, Int64}, forces::Vector{Float64}; δ = 0.1, n = 90, normalize_forces = false, store_function = false)
-        i = node.index
-
-        #indices of elements connected to node i
-        i_connected = findall(.!iszero.(C[:, i]))
-
-        #-1 if node i is start point, 1 if node i is end point
-        start_end = collect(C[:, i][i_connected])
-
-        #external forces
-        external_loads = Vector{Float64}()
-        external_load_positions = Vector{Vector{Float64}}()
-
-        for load in model.loads
-            if load isa NodeLoad && load.node.index == i
-                val = collect(load.value[1:2])
-
-                #position of load vector (default top)
-                position_vector = normalize(val)
-                if val[2] < 0 #this is a compressive force acting downwards
-                    push!(external_load_positions, position_vector .* -1)
-                    push!(external_loads, -norm(val))
-                else #else it is a tensile force acting upwards
-                    push!(external_load_positions, normalize(val))
-                    push!(external_loads, norm(val))
-                end
-            end
-        end
-
-        #reaction if applicable
-        rxn6 = reaction(model.results, model.nodes[i])
-        if !iszero(norm(rxn6))
-
-            rxn = collect(rxn6[1:2])
-
-            #position of reaction vector (default bottom
-            position_vector = normalize(rxn)
-            if rxn[2] > 0 #this is a compressive force acting upwards
-                push!(external_loads, -norm(rxn))
-                push!(external_load_positions, position_vector .* -1)
-            else #else it is a tensile force acting downwards
-                push!(external_loads, norm(rxn))
-                push!(external_load_positions, position_vector)
-            end
-        end
-
-        #force values
-        node_forces = forces[i_connected]
-        if !isempty(external_loads)
-            node_forces = [node_forces; external_loads]
-        end
-
-        if normalize_forces
-            node_forces .= 1.0
-        end
-
-        #force positions
-        force_positions = [-local_frame(e)[1, 1:2] .* factor for (e, factor) in zip(model.elements[i_connected], start_end)]
-        if !isempty(external_loads)
-            force_positions = [force_positions; external_load_positions]
-        end
-
-        #sampled circular signature (visualization / numeric validation only)
-        force_function = store_function ? circular_gaussian(force_positions, node_forces, δ, n) : Float64[]
-
-        #return
-        new(node, force_positions, node_forces, force_function)
-    end
-end
-
-"""
-    HarmonicAnalysis2d(model; delta = 0.1, n = 90, dims = 16,
-                       normalize_forces = false, store_functions = false)
+    HarmonicAnalysis2d(model; delta = 0.1, dims = 16, normalize_forces = false)
 
 Fourier shape-descriptor analysis of every node of a solved **planar (XY)**
-`Model`: builds a [`NodeForces2d`](@ref) signature per node and computes its
-rotation-invariant feature vector (frequencies `k = 0:dims-1`) in closed form
-via [`circular_feature_vector`](@ref).
-
-`delta` is the angular width σ of the Gaussian force bumps. With
-`store_functions = true` the `n`-point sampled circular signatures are also
-retained in `forcefunctions` for visualization (note: a raw `rfft` of those
-samples is ≈ `n×` the closed-form feature values).
+`Model`, returning a `HarmonicAnalysis{2}`. `delta` is the angular width σ of
+the Gaussian force bumps; `dims` is the feature-vector length (frequencies
+`k = 0:dims-1`).
 """
-mutable struct HarmonicAnalysis2d
-    model::Model{Float64}
-    nodeforces::Vector{NodeForces2d}
-    forcefunctions::Vector{Vector{Float64}}
-    featurevectors::Vector{Vector{Float64}}
+HarmonicAnalysis2d(model::Model; delta::Real = 0.1, dims::Integer = 16, normalize_forces::Bool = false) =
+    _harmonic_analysis(Val(2), model, delta, dims, normalize_forces)
 
-    function HarmonicAnalysis2d(model::Model; delta = 0.1, n = 90, dims = 16, normalize_forces = false, store_functions = false)
-        C = connectivity(model)
-        forces = [axial_force(model.results, el) for el in model.elements]
+function Base.show(io::IO, sig::NodeSignature{D}) where {D}
+    print(io, "NodeSignature{$D}(node $(sig.index) [:$(sig.id)], $(length(sig.magnitudes)) forces)")
+end
 
-        nodeforces = [NodeForces2d(node, model, C, forces; δ = delta, n = n, normalize_forces = normalize_forces, store_function = store_functions) for node in model.nodes]
-
-        forcefunctions = getproperty.(nodeforces, :forcefunction)
-
-        featurevectors = [circular_feature_vector(nf.forcepositions, nf.forcemagnitudes; sigma = delta, dims = dims) for nf in nodeforces]
-
-        new(model, nodeforces, forcefunctions, featurevectors)
-    end
-
+function Base.show(io::IO, ha::HarmonicAnalysis{D}) where {D}
+    print(io, "HarmonicAnalysis{$D}: $(length(ha.signatures)) nodes, dims = $(ha.dims), delta = $(ha.delta)")
 end

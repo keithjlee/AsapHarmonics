@@ -136,41 +136,97 @@ const MAGS = [2.0, -1.5, 0.8, 3.0, -2.2]
         model = small_truss()
 
         ha = HarmonicAnalysis(model; dims = 8)
-        @test length(ha.nodeforces) == length(model.nodes)
+        @test ha isa HarmonicAnalysis{3,Float64}
+        @test length(ha.signatures) == length(model.nodes)
         @test all(fv -> length(fv) == 8 && all(isfinite, fv), ha.featurevectors)
-        @test all(nf -> isempty(nf.forcefunction), ha.nodeforces)
 
         # loaded node's signature includes its external load
-        loaded = ha.nodeforces[3]
-        @test length(loaded.forcemagnitudes) >= 3 # connected members + load
+        loaded = ha.signatures[3]
+        @test length(loaded.magnitudes) >= 3 # connected members + load
+        @test all(d -> norm(d) ≈ 1, loaded.directions)
 
-        # stored sampled signatures reproduce the closed-form feature vectors
-        ha_f = HarmonicAnalysis(model; dims = 8, store_functions = true, resolution = 90)
-        @test all(nf -> !isempty(nf.forcefunction) && all(isfinite, nf.forcefunction), ha_f.nodeforces)
-        for (ff, fv) in zip(ha_f.forcefunctions, ha_f.featurevectors)
-            @test isapprox(spherical_feature_vector(ff; dims = 8), fv; rtol = 1e-6)
+        # on-demand sampled signatures reproduce the closed-form feature vectors
+        for (sig, fv) in zip(ha.signatures, ha.featurevectors)
+            F = sampled_force_function(sig; nlat = 91)
+            @test isapprox(spherical_feature_vector(F; dims = 8), fv; rtol = 1e-6)
         end
     end
 
-    @testset "HarmonicAnalysis2d (planar end-to-end)" begin
+    function planar_truss(α::Real) # in-plane rotation of geometry and loads by α
+        R = [cos(α) -sin(α) 0.0; sin(α) cos(α) 0.0; 0.0 0.0 1.0]
         mat = Material(200e6, 1.0, 80.0, 0.3)
         sec = Section(mat, 1e-2)
         rot = [true, true, true]
-        p1 = Node([0.0, 0.0, 0.0], vcat([false, false, false], rot))
-        p2 = Node([4.0, 0.0, 0.0], vcat([false, false, false], rot))
-        p3 = Node([2.0, 3.0, 0.0], vcat([true, true, false], rot))
-        pels = AbstractElement{Float64}[TrussElement(p1, p3, sec), TrussElement(p2, p3, sec)]
+        p1 = Node(R * [0.0, 0.0, 0.0], vcat([false, false, false], rot))
+        p2 = Node(R * [4.0, 0.0, 0.0], vcat([false, false, false], rot))
+        p3 = Node(R * [2.0, 3.0, 0.0], vcat([true, true, false], rot))
+        # loads at the supports keep every signature non-degenerate: with a
+        # bare pinned 2-bar truss each reaction is exactly collinear with its
+        # member and the support signatures legitimately cancel to zero
+        pels = AbstractElement{Float64}[
+            TrussElement(p1, p3, sec), TrussElement(p2, p3, sec), TrussElement(p1, p2, sec)]
         pmodel = Model([p1, p2, p3], pels,
-            AbstractLoad{Float64}[NodeForce(p3, [0.0, -50.0, 0.0])])
+            AbstractLoad{Float64}[
+                NodeForce(p3, R * [0.0, -50.0, 0.0]),
+                NodeForce(p1, R * [7.0, 3.0, 0.0]),
+                NodeForce(p2, R * [-4.0, 6.0, 0.0])])
         solve!(pmodel)
+        return pmodel
+    end
 
-        ha2 = HarmonicAnalysis2d(pmodel; dims = 8, n = 360, store_functions = true)
-        @test length(ha2.nodeforces) == length(pmodel.nodes)
+    @testset "HarmonicAnalysis2d (planar end-to-end)" begin
+        pmodel = planar_truss(0.0)
+
+        ha2 = HarmonicAnalysis2d(pmodel; dims = 8)
+        @test ha2 isa HarmonicAnalysis{2,Float64}
+        @test length(ha2.signatures) == length(pmodel.nodes)
         @test all(fv -> all(isfinite, fv), ha2.featurevectors)
 
-        # sampled rfft path ≈ n × closed form
-        for (ff, fv) in zip(ha2.forcefunctions, ha2.featurevectors)
-            @test isapprox(circular_feature_vector(ff; dims = 8) ./ 360, fv; rtol = 1e-4)
+        # on-demand sampled rfft path ≈ n × closed form
+        for (sig, fv) in zip(ha2.signatures, ha2.featurevectors)
+            ff = circular_gaussian(sig, 0.1, 360)
+            @test isapprox(circular_feature_vector(ff; dims = 8) ./ 360, fv; rtol = 1e-4, atol = 1e-9)
+        end
+        @test all(fv -> any(>(1e-3), fv), ha2.featurevectors) # non-degenerate signatures
+    end
+
+    @testset "whole-model rotation equivariance" begin
+        # rotating geometry AND loads together must leave all descriptors
+        # unchanged (the v1 2D load/reaction sign convention depended on the
+        # global vertical and violated this)
+        ha_ref = HarmonicAnalysis2d(planar_truss(0.0); dims = 8)
+        for α in (0.6, π / 2, π, 4.0)
+            ha_rot = HarmonicAnalysis2d(planar_truss(α); dims = 8)
+            for (fv, fv_rot) in zip(ha_ref.featurevectors, ha_rot.featurevectors)
+                @test isapprox(fv, fv_rot; rtol = 1e-8, atol = 1e-9)
+            end
+        end
+
+        # 3D: rotate the full model about z (supports stay axis-consistent)
+        function rotated_truss(α)
+            R = [cos(α) -sin(α) 0.0; sin(α) cos(α) 0.0; 0.0 0.0 1.0]
+            mat = Material(200e6, 1.0, 80.0, 0.3)
+            sec = Section(mat, 1e-2)
+            rot = [true, true, true]
+            n1 = Node(R * [0.0, 0.0, 0.0], vcat([false, false, false], rot))
+            n2 = Node(R * [4.0, 0.0, 0.0], vcat([false, false, false], rot))
+            n3 = Node(R * [2.0, 3.0, 0.0], vcat([true, true, false], rot))
+            n4 = Node(R * [2.0, 3.0, 4.0], vcat([true, true, true], rot))
+            els = AbstractElement{Float64}[
+                TrussElement(n1, n3, sec), TrussElement(n2, n3, sec),
+                TrussElement(n1, n4, sec), TrussElement(n2, n4, sec),
+                TrussElement(n3, n4, sec)]
+            loads = AbstractLoad{Float64}[
+                NodeForce(n3, R * [0.0, -50.0, 0.0]), NodeForce(n4, R * [10.0, -20.0, 5.0])]
+            model = Model([n1, n2, n3, n4], els, loads)
+            solve!(model)
+            return model
+        end
+
+        ha3_ref = HarmonicAnalysis(rotated_truss(0.0); dims = 8)
+        ha3_rot = HarmonicAnalysis(rotated_truss(1.1); dims = 8)
+        for (fv, fv_rot) in zip(ha3_ref.featurevectors, ha3_rot.featurevectors)
+            @test isapprox(fv, fv_rot; rtol = 1e-8, atol = 1e-9)
         end
     end
 end
