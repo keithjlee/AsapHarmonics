@@ -43,6 +43,7 @@ hp = harmonic_params(p; delta = 20, dims = 16)
 
 x0 = copy(p.values)
 obj(x) = soft_complexity(x, p, hp)
+@time d0 = Zygote.gradient(obj, x0)[1]
 
 println("initial soft complexity: ", round(obj(x0), digits = 3))
 println("initial exact complexity: ", round(complexity(x0, p, hp), digits = 3))
@@ -51,10 +52,10 @@ println("initial exact complexity: ", round(complexity(x0, p, hp), digits = 3))
 
 x = copy(x0)
 history = [obj(x)]
-steps = 300
+steps = 1000
 η = 0.02
 
-for _ = 1:steps
+@time for _ = 1:steps
     g = Zygote.gradient(obj, x)[1]
     global x = clamp.(x - η * g / (norm(g) + 1e-12), p.lb, p.ub)
     push!(history, obj(x))
@@ -143,6 +144,8 @@ begin
     axislegend(ax; position = :rb, framevisible = false)
 
     savefig("optimization_demandspace", fig)
+
+    fig
 end
 
 println("figures written to examples/figures/")
