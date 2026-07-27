@@ -418,6 +418,157 @@ const MAGS = [2.0, -1.5, 0.8, 3.0, -2.2]
         @test isapprox(g2, g2f; rtol = 1e-6)
     end
 
+    @testset "clustered soft complexity" begin
+        ha = HarmonicAnalysis(small_truss(); dims = 8)
+        fvs = ha.featurevectors
+        n = length(fvs)
+        a = [1, 2, 2, 1]
+
+        # the block-averaging projector: symmetric, idempotent, column i of
+        # F·P = centroid of node i's cluster
+        P = cluster_projector(a)
+        @test size(P) == (n, n) && issymmetric(P)
+        @test P * P ≈ P
+        F = feature_matrix(ha)
+        cent = F * P
+        @test cent[:, 1] ≈ (fvs[1] + fvs[4]) / 2 ≈ cent[:, 4]
+        @test cent[:, 2] ≈ (fvs[2] + fvs[3]) / 2 ≈ cent[:, 3]
+
+        # clustered soft complexity vs a naive per-node reference, all forms
+        ref = sqrt(sum(sum(abs2, fvs[i] - cent[:, i]) for i = 1:n) / n)
+        @test soft_complexity(F, P) ≈ ref
+        @test soft_complexity(F, a) ≈ ref
+        @test soft_complexity(fvs, a) ≈ ref
+        @test soft_complexity(ha, a) ≈ ref
+
+        # one big cluster ≡ the global soft complexity; singletons contribute 0
+        @test soft_complexity(ha, ones(Int, n)) ≈ soft_complexity(ha)
+        @test soft_complexity(ha, collect(1:n)) ≈ 0 atol = 1e-12
+
+        # per-cluster smooth complexities: label order, per-cluster values,
+        # bounded by twice the bounding-sphere radii
+        scc = soft_cluster_complexities(fvs, a)
+        @test scc ≈ [soft_complexity(fvs[[1, 4]]), soft_complexity(fvs[[2, 3]])]
+        @test all(scc .<= 2 .* cluster_complexities(fvs, a) .+ 1e-12)
+        @test soft_cluster_complexities(ha, a) ≈ scc
+
+        @test_throws DimensionMismatch soft_complexity(F, [1, 2])
+        @test_throws DimensionMismatch soft_cluster_complexities(fvs, [1, 2])
+    end
+
+    @testset "signature weights: :force / :sign / :unit" begin
+        model = small_truss()
+        C = connectivity(model)
+
+        # :sign ≡ the normalize_forces alias
+        ha_s = HarmonicAnalysis(model; dims = 8, weights = :sign)
+        ha_alias = HarmonicAnalysis(model; dims = 8, normalize_forces = true)
+        for (a, b) in zip(ha_s.featurevectors, ha_alias.featurevectors)
+            @test a == b
+        end
+        @test all(all(m -> abs(m) == 1, sig.magnitudes) for sig in ha_s.signatures)
+
+        # :unit — members only, all magnitudes exactly one
+        ha_u = HarmonicAnalysis(model; dims = 8, weights = :unit)
+        for (i, sig) in enumerate(ha_u.signatures)
+            @test all(==(1.0), sig.magnitudes)
+            @test length(sig.directions) == count(!iszero, C[:, i])
+        end
+
+        # geometry-only means load-independent: same geometry, different
+        # loads → identical :unit descriptors (while :force descriptors move)
+        model2 = small_truss()
+        model2.loads[1] = NodeForce(model2.nodes[3], [0.0, -150.0, 30.0])
+        solve!(model2)
+        ha_u2 = HarmonicAnalysis(model2; dims = 8, weights = :unit)
+        ha_f2 = HarmonicAnalysis(model2; dims = 8)
+        @test all(ha_u.featurevectors .≈ ha_u2.featurevectors)
+        ha_f = HarmonicAnalysis(model; dims = 8)
+        @test !all(isapprox.(ha_f.featurevectors, ha_f2.featurevectors))
+
+        # a processed-but-unsolved model suffices for :unit
+        mat = Material(200e6, 1.0, 80.0, 0.3)
+        sec = Section(mat, 1e-2)
+        rot = [true, true, true]
+        n1 = Node([0.0, 0.0, 0.0], vcat([false, false, false], rot))
+        n2 = Node([4.0, 0.0, 0.0], vcat([false, false, false], rot))
+        n3 = Node([2.0, 3.0, 0.0], vcat([true, true, false], rot))
+        n4 = Node([2.0, 3.0, 4.0], vcat([true, true, true], rot))
+        els = AbstractElement{Float64}[
+            TrussElement(n1, n3, sec), TrussElement(n2, n3, sec),
+            TrussElement(n1, n4, sec), TrussElement(n2, n4, sec),
+            TrussElement(n3, n4, sec)]
+        unsolved = Model([n1, n2, n3, n4], els,
+            AbstractLoad{Float64}[NodeForce(n3, [0.0, -50.0, 0.0])])
+        process!(unsolved)
+        ha_raw = HarmonicAnalysis(unsolved; dims = 8, weights = :unit)
+        @test all(ha_raw.featurevectors .≈ ha_u.featurevectors)
+
+        @test_throws ArgumentError HarmonicAnalysis(model; weights = :bogus)
+    end
+
+    @testset "AsapOptim: feature_matrix, clustered objective, :unit weights" begin
+        using AsapOptim, Zygote
+
+        model = small_truss()
+        vars = [
+            SpatialVariable(model.nodes[4], 0.0, -1.0, 1.0, :Z),
+            SpatialVariable(model.nodes[4], 0.0, -1.0, 1.0, :X),
+            SpatialVariable(model.nodes[3], 0.0, -1.0, 1.0, :Y),
+        ]
+        p = OptParams(model, vars)
+        x0 = copy(p.values)
+        n = length(model.nodes)
+
+        # exported feature_matrix ≡ feature_vectors ≡ model-facing pipeline
+        hp = harmonic_params(p; delta = 20, dims = 8)
+        F = feature_matrix(x0, p, hp)
+        @test F ≈ reduce(hcat, feature_vectors(x0, p, hp))
+        @test isapprox(F, feature_matrix(HarmonicAnalysis(model; delta = 20, dims = 8));
+            rtol = 1e-6, atol = 1e-8)
+
+        # clustered design objective: value parity + reverse/forward gradients
+        a = [1, 2, 2, 1]
+        P = cluster_projector(a)
+        obj(x) = soft_complexity(x, p, hp, P)
+        @test obj(x0) ≈ soft_complexity(F, a)
+        @test soft_complexity(x0, p, hp, a) ≈ obj(x0)
+        @test obj(x0) <= soft_complexity(x0, p, hp) + 1e-12 # clustering only shrinks
+        g_zy = Zygote.gradient(obj, x0)[1]
+        g_fw = ForwardDiff.gradient(obj, x0)
+        @test isapprox(g_zy, g_fw; rtol = 1e-6)
+        @test norm(g_zy) > 0
+
+        # :unit — solve-free geometry descriptors, parity with the core path
+        hpu = harmonic_params(p; delta = 20, dims = 8, weights = :unit)
+        Fu = feature_matrix(x0, p, hpu)
+        @test isapprox(Fu, feature_matrix(HarmonicAnalysis(model; delta = 20, dims = 8, weights = :unit));
+            rtol = 1e-6, atol = 1e-8)
+        @test feature_matrix(AsapOptim.solve_structure(x0, p), p, hpu) ≈ Fu
+
+        obju(x) = soft_complexity(x, p, hpu, P)
+        gu_zy = Zygote.gradient(obju, x0)[1]
+        gu_fw = ForwardDiff.gradient(obju, x0)
+        @test isapprox(gu_zy, gu_fw; rtol = 1e-6)
+        h = 1e-6
+        gu_num = [(obju(x0 + h * I(3)[:, i]) - obju(x0 - h * I(3)[:, i])) / 2h for i = 1:3]
+        @test isapprox(gu_fw, gu_num; rtol = 1e-4)
+
+        # 2D :unit parity against HarmonicAnalysis2d
+        pmodel = planar_truss(0.0)
+        p2 = OptParams(pmodel, [SpatialVariable(pmodel.nodes[3], 0.0, -1.0, 1.0, :Y)])
+        hp2u = harmonic_params(p2; delta = 0.1, dims = 8, dimension = 2, weights = :unit)
+        F2u = feature_matrix(copy(p2.values), p2, hp2u)
+        ha2u = HarmonicAnalysis2d(pmodel; delta = 0.1, dims = 8, weights = :unit)
+        @test isapprox(F2u, feature_matrix(ha2u); rtol = 1e-6, atol = 1e-8)
+        g2u = Zygote.gradient(x -> soft_complexity(x, p2, hp2u), copy(p2.values))[1]
+        g2uf = ForwardDiff.gradient(x -> soft_complexity(x, p2, hp2u), copy(p2.values))
+        @test isapprox(g2u, g2uf; rtol = 1e-6)
+
+        # :sign has no differentiable meaning over designs
+        @test_throws ArgumentError harmonic_params(p; weights = :sign)
+    end
+
     @testset "regression: pinned descriptor values" begin
         # exact values pinned at v2.0; any change to kernel constants or
         # normalization conventions must fail here

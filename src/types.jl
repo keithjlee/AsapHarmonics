@@ -20,10 +20,19 @@ incident member axial forces, applied `NodeForce`s, and the support reaction.
 `index`/`id` identify the node in its model.
 
 Built from a solved model via
-`NodeSignature{D}(node, model, C, forces; normalize_forces = false)` where `C`
-is `connectivity(model)` and `forces` the member axial forces;
-`normalize_forces = true` replaces every magnitude by its sign. Usually
-constructed in bulk by [`HarmonicAnalysis`](@ref) / [`HarmonicAnalysis2d`](@ref).
+`NodeSignature{D}(node, model, C, forces; weights = :force)` where `C` is
+`connectivity(model)` and `forces` the member axial forces. `weights` selects
+the bump magnitudes:
+
+- `:force` — signed member forces, load/reaction magnitudes (the default);
+- `:sign` — every magnitude replaced by its sign (orientation +
+  tension/compression only); `normalize_forces = true` is an equivalent alias;
+- `:unit` — **geometry only**: incident member directions with unit
+  magnitudes, no load or reaction bumps (`forces` values are ignored, so a
+  `process!`ed model suffices — no solve needed).
+
+Usually constructed in bulk by [`HarmonicAnalysis`](@ref) /
+[`HarmonicAnalysis2d`](@ref).
 """
 struct NodeSignature{D,T}
     index::Int
@@ -41,8 +50,11 @@ function NodeSignature{D}(
     C::SparseMatrixCSC{<:Integer},
     forces::AbstractVector;
     normalize_forces::Bool = false,
+    weights::Symbol = normalize_forces ? :sign : :force,
 ) where {D}
     D == 2 || D == 3 || throw(ArgumentError("NodeSignature dimension must be 2 or 3, got $D"))
+    weights in (:force, :sign, :unit) ||
+        throw(ArgumentError("weights must be :force, :sign, or :unit, got :$weights"))
 
     i = node.index
     T = promote_type(eltype(node.position), eltype(forces))
@@ -53,35 +65,38 @@ function NodeSignature{D}(
     directions = Vector{SVector{D,T}}()
     magnitudes = Vector{T}()
 
-    # incident members: signed axial force at the outward direction
+    # incident members: signed axial force at the outward direction (unit
+    # magnitude under :unit — pure connection geometry)
     for (e, factor) in zip(model.elements[i_connected], factors)
         d = -normalize(e.nodeEnd.position - e.nodeStart.position) * factor
         push!(directions, normalize(_project(SVector{3,T}(d), Val(D))))
     end
-    append!(magnitudes, forces[i_connected])
+    append!(magnitudes, weights == :unit ? ones(T, length(i_connected)) : forces[i_connected])
 
-    # applied point forces: |P| at P̂
-    for load in model.loads
-        (load isa NodeForce && load.node.index == i) || continue
+    if weights != :unit
+        # applied point forces: |P| at P̂
+        for load in model.loads
+            (load isa NodeForce && load.node.index == i) || continue
 
-        P = _project(SVector{3,T}(load.value), Val(D))
-        m = norm(P)
-        iszero(m) && continue
+            P = _project(SVector{3,T}(load.value), Val(D))
+            m = norm(P)
+            iszero(m) && continue
 
-        push!(directions, P / m)
-        push!(magnitudes, m)
+            push!(directions, P / m)
+            push!(magnitudes, m)
+        end
+
+        # support reaction (translational components): |R| at R̂
+        r = reaction(model.results, node)
+        R = _project(SVector{3,T}(r[1], r[2], r[3]), Val(D))
+        mR = norm(R)
+        if !iszero(mR)
+            push!(directions, R / mR)
+            push!(magnitudes, mR)
+        end
     end
 
-    # support reaction (translational components): |R| at R̂
-    r = reaction(model.results, node)
-    R = _project(SVector{3,T}(r[1], r[2], r[3]), Val(D))
-    mR = norm(R)
-    if !iszero(mR)
-        push!(directions, R / mR)
-        push!(magnitudes, mR)
-    end
-
-    normalize_forces && (magnitudes = sign.(magnitudes))
+    weights == :sign && (magnitudes = sign.(magnitudes))
 
     return NodeSignature{D,T}(i, node.id, directions, magnitudes)
 end
@@ -130,43 +145,49 @@ function _harmonic_analysis(
     model::Model,
     delta::Real,
     dims::Integer,
-    normalize_forces::Bool,
+    weights::Symbol,
 ) where {D}
     C = connectivity(model)
-    forces = [axial_force(model.results, el) for el in model.elements]
+    # :unit ignores force values entirely (geometry-only), so the model need
+    # not be solved
+    forces = weights == :unit ? zeros(length(model.elements)) :
+             [axial_force(model.results, el) for el in model.elements]
 
-    signatures = [
-        NodeSignature{D}(node, model, C, forces; normalize_forces = normalize_forces) for
-        node in model.nodes
-    ]
+    signatures =
+        [NodeSignature{D}(node, model, C, forces; weights = weights) for node in model.nodes]
     featurevectors = [feature_vector(sig; delta = delta, dims = dims) for sig in signatures]
 
     return HarmonicAnalysis(signatures, featurevectors, Float64(delta), Int(dims))
 end
 
 """
-    HarmonicAnalysis(model; delta = 20, dims = 16, normalize_forces = false)
+    HarmonicAnalysis(model; delta = 20, dims = 16, weights = :force)
 
 Spherical-harmonic shape-descriptor analysis of every node of a solved 3D
 `Model`. `delta` is the sharpness of the Gaussian force bumps (each bump
 approaches a Dirac spike as `delta → ∞`); `dims` is the feature-vector length
-(spherical-harmonic degrees `l = 0:dims-1`); `normalize_forces = true`
-discards force magnitudes and keeps only orientations and tension/compression
-signs.
+(spherical-harmonic degrees `l = 0:dims-1`). `weights` selects the bump
+magnitudes (see [`NodeSignature`](@ref)): `:force` (default), `:sign`
+(orientations + tension/compression signs only; keyword
+`normalize_forces = true` is an equivalent alias), or `:unit` (geometry only —
+incident member directions, no load/reaction bumps; a `process!`ed model
+suffices, no solve needed).
 """
-HarmonicAnalysis(model::Model; delta::Real = 20, dims::Integer = 16, normalize_forces::Bool = false) =
-    _harmonic_analysis(Val(3), model, delta, dims, normalize_forces)
+HarmonicAnalysis(model::Model; delta::Real = 20, dims::Integer = 16,
+    normalize_forces::Bool = false, weights::Symbol = normalize_forces ? :sign : :force) =
+    _harmonic_analysis(Val(3), model, delta, dims, weights)
 
 """
-    HarmonicAnalysis2d(model; delta = 0.1, dims = 16, normalize_forces = false)
+    HarmonicAnalysis2d(model; delta = 0.1, dims = 16, weights = :force)
 
 Fourier shape-descriptor analysis of every node of a solved **planar (XY)**
 `Model`, returning a `HarmonicAnalysis{2}`. `delta` is the angular width σ of
 the Gaussian force bumps; `dims` is the feature-vector length (frequencies
-`k = 0:dims-1`).
+`k = 0:dims-1`); `weights` as in [`HarmonicAnalysis`](@ref).
 """
-HarmonicAnalysis2d(model::Model; delta::Real = 0.1, dims::Integer = 16, normalize_forces::Bool = false) =
-    _harmonic_analysis(Val(2), model, delta, dims, normalize_forces)
+HarmonicAnalysis2d(model::Model; delta::Real = 0.1, dims::Integer = 16,
+    normalize_forces::Bool = false, weights::Symbol = normalize_forces ? :sign : :force) =
+    _harmonic_analysis(Val(2), model, delta, dims, weights)
 
 function Base.show(io::IO, sig::NodeSignature{D}) where {D}
     print(io, "NodeSignature{$D}(node $(sig.index) [:$(sig.id)], $(length(sig.magnitudes)) forces)")

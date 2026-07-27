@@ -23,17 +23,19 @@ module AsapHarmonicsOptimExt
 
 using AsapHarmonics, AsapOptim, Asap
 using LinearAlgebra, SparseArrays
-import AsapHarmonics: harmonic_params, feature_vectors, soft_complexity, complexity,
-    zonal_coefficients, _band_norm, _constmul, _mulconst
+import AsapHarmonics: harmonic_params, feature_matrix, feature_vectors, soft_complexity,
+    complexity, cluster_projector, zonal_coefficients, _band_norm, _constmul, _mulconst
 
 """
 Constant data of a shape-descriptor evaluation over an `OptParams` — see
-`AsapHarmonics.harmonic_params`. Bump order is [members; loads; reactions].
+`AsapHarmonics.harmonic_params`. Bump order is [members; loads; reactions]
+(members only under `weights = :unit`).
 """
 struct HarmonicOptParams
     dimension::Int                     # 2 (circle) or 3 (sphere)
     delta::Float64                     # kernel parameter (δ in 3D, σ in 2D)
     dims::Int                          # feature-vector length
+    weights::Symbol                    # :force (demands) or :unit (geometry only)
     prefactor::Vector{Float64}         # FVₗ = prefactor[l+1]·√Sₗ
     Gmem::SparseMatrixCSC{Float64,Int} # n_el × M_mem: D_mem = Ê · Gmem (cols = -sign·Êₑ)
     Smem::SparseMatrixCSC{Float64,Int} # M_mem × n_el: m_mem = Smem · f
@@ -47,9 +49,13 @@ struct HarmonicOptParams
     nnodes::Int
 end
 
-function harmonic_params(p::OptParams; delta::Real = 20, dims::Integer = 16, dimension::Integer = 3)
+function harmonic_params(p::OptParams; delta::Real = 20, dims::Integer = 16,
+    dimension::Integer = 3, weights::Symbol = :force)
     dimension == 2 || dimension == 3 ||
         throw(ArgumentError("dimension must be 2 or 3, got $dimension"))
+    weights == :force || weights == :unit ||
+        throw(ArgumentError("weights must be :force or :unit for optimization " *
+                            "(:sign is not differentiable), got :$weights"))
 
     model = p.model
     n = length(model.nodes)
@@ -74,19 +80,22 @@ function harmonic_params(p::OptParams; delta::Real = 20, dims::Integer = 16, dim
     Gmem = sparse(gI, gJ, gV, nel, Mmem)
     Smem = sparse(sI, sJ, ones(Mmem), Mmem, nel)
 
-    # applied point forces: constant bumps (projected per dimension)
+    # applied point forces: constant bumps (projected per dimension); none
+    # under :unit — the geometry-only signature is members only
     loaddirs = Vector{Float64}[]
     mload = Float64[]
-    for load in model.loads
-        load isa NodeForce || continue
-        i = load.node.index
-        P = collect(Float64, load.value)[1:d]
-        m = norm(P)
-        iszero(m) && continue
-        nbumps += 1
-        push!(loaddirs, P ./ m)
-        push!(mload, m)
-        push!(bumps[i], nbumps)
+    if weights == :force
+        for load in model.loads
+            load isa NodeForce || continue
+            i = load.node.index
+            P = collect(Float64, load.value)[1:d]
+            m = norm(P)
+            iszero(m) && continue
+            nbumps += 1
+            push!(loaddirs, P ./ m)
+            push!(mload, m)
+            push!(bumps[i], nbumps)
+        end
     end
     Dload = isempty(loaddirs) ? zeros(d, 0) : reduce(hcat, loaddirs)
 
@@ -95,13 +104,15 @@ function harmonic_params(p::OptParams; delta::Real = 20, dims::Integer = 16, dim
     rI = Int[]; rJ = Int[]
     fixmask = zeros(3, n)
     nrxn = 0
-    for (i, node) in enumerate(model.nodes)
-        fixmask[:, i] .= .!node.fixity[1:3]
-        any(.!node.fixity[1:3]) || continue
-        nbumps += 1
-        nrxn += 1
-        push!(rI, i); push!(rJ, nrxn)
-        push!(bumps[i], nbumps)
+    if weights == :force
+        for (i, node) in enumerate(model.nodes)
+            fixmask[:, i] .= .!node.fixity[1:3]
+            any(.!node.fixity[1:3]) || continue
+            nbumps += 1
+            nrxn += 1
+            push!(rI, i); push!(rJ, nrxn)
+            push!(bumps[i], nbumps)
+        end
     end
     Grxn = sparse(rI, rJ, ones(nrxn), n, nrxn)
 
@@ -128,11 +139,15 @@ function harmonic_params(p::OptParams; delta::Real = 20, dims::Integer = 16, dim
     end
 
     return HarmonicOptParams(
-        d, Float64(delta), Int(dims), prefactor,
+        d, Float64(delta), Int(dims), weights, prefactor,
         Gmem, Smem, Dload, mload, Grxn, fixmask,
         pairI, pairJ, Apair, n,
     )
 end
+
+"design positions without a solve: X(x) = X0 + reshape(Sx·x, 3, :)"
+_positions(x::AbstractVector, p::OptParams) =
+    p.X0 + reshape(_constmul(p.Sx, x), 3, :)
 
 # smooth column normalization; the ε floor keeps zero columns (unloaded free
 # DOFs never reach here, but exact zeros must not produce NaN directions)
@@ -166,6 +181,15 @@ function _bump_data(res::OptResults, p::OptParams, hp::HarmonicOptParams)
     return D, m
 end
 
+"geometry-only bump data from positions alone (weights = :unit): unit member
+directions, unit magnitudes — no forces, no solve"
+function _unit_bump_data(X::AbstractMatrix, p::OptParams, hp::HarmonicOptParams)
+    ΔX = _mulconst(X, transpose(p.Cinc))        # 3 × n_el, end - start
+    E = hp.dimension == 3 ? ΔX : ΔX[1:2, :]
+    Ehat = E ./ transpose(_colnorms(E))
+    return _mulconst(Ehat, hp.Gmem), ones(size(hp.Gmem, 2))
+end
+
 "band sums Sₗ (dims × n_nodes): Legendre (3D) or Chebyshev cos(kΔθ) (2D) recurrence over all pairs"
 function _band_sums(t, w, hp::HarmonicOptParams)
     A = hp.Apair
@@ -187,10 +211,8 @@ function _band_sums(t, w, hp::HarmonicOptParams)
     return S
 end
 
-"feature vectors of a design evaluation as a dims × n_nodes matrix"
-function _feature_matrix(res::OptResults, p::OptParams, hp::HarmonicOptParams)
-    D, m = _bump_data(res, p, hp)
-
+"descriptors from bump data: pair dots → band sums → prefactor·√Sₗ"
+function _descriptor_matrix(D::AbstractMatrix, m::AbstractVector, hp::HarmonicOptParams)
     t = vec(sum(D[:, hp.pairI] .* D[:, hp.pairJ]; dims = 1))
     w = m[hp.pairI] .* m[hp.pairJ]
 
@@ -198,24 +220,56 @@ function _feature_matrix(res::OptResults, p::OptParams, hp::HarmonicOptParams)
     return hp.prefactor .* _band_norm.(S)
 end
 
+"""
+    feature_matrix(res, p, hp)
+    feature_matrix(x, p, hp)
+
+Feature vectors of a design evaluation as a `dims × n_nodes` matrix — the
+fully batched, reverse-AD-friendly layout every differentiable objective over
+the descriptors should build on (see `AsapHarmonics.feature_matrix`).
+`res = solve_structure(x, p)`; `hp` from `AsapHarmonics.harmonic_params`.
+Under `weights = :unit` the design-vector method evaluates from positions
+alone — no structural solve.
+"""
+feature_matrix(res::OptResults, p::OptParams, hp::HarmonicOptParams) =
+    hp.weights == :unit ? _descriptor_matrix(_unit_bump_data(res.X, p, hp)..., hp) :
+    _descriptor_matrix(_bump_data(res, p, hp)..., hp)
+
+function feature_matrix(x::AbstractVector, p::OptParams, hp::HarmonicOptParams)
+    hp.weights == :unit &&
+        return _descriptor_matrix(_unit_bump_data(_positions(x, p), p, hp)..., hp)
+    return feature_matrix(solve_structure(x, p), p, hp)
+end
+
 feature_vectors(res::OptResults, p::OptParams, hp::HarmonicOptParams) =
-    collect.(eachcol(_feature_matrix(res, p, hp)))
+    collect.(eachcol(feature_matrix(res, p, hp)))
 
 feature_vectors(x::AbstractVector, p::OptParams, hp::HarmonicOptParams) =
-    feature_vectors(solve_structure(x, p), p, hp)
+    collect.(eachcol(feature_matrix(x, p, hp)))
 
 soft_complexity(res::OptResults, p::OptParams, hp::HarmonicOptParams) =
-    soft_complexity(_feature_matrix(res, p, hp))
+    soft_complexity(feature_matrix(res, p, hp))
 
 """
     soft_complexity(x, p, hp)
+    soft_complexity(x, p, hp, P_or_assignments)
 
-The differentiable design objective: smooth complexity of the design `x`
-evaluated through `solve_structure`. Minimize to reduce variation in nodal
-force demands.
+The differentiable design objective: smooth complexity of the design `x` —
+global (3-argument), or within-cluster (4-argument, given a
+`cluster_projector` or the integer assignments themselves; pass the projector
+in optimization loops so it is not rebuilt every evaluation). Minimize to
+reduce variation in nodal demands, overall or within each connection family.
 """
 soft_complexity(x::AbstractVector, p::OptParams, hp::HarmonicOptParams) =
-    soft_complexity(solve_structure(x, p), p, hp)
+    soft_complexity(feature_matrix(x, p, hp))
+
+const _ClusterSpec = Union{SparseMatrixCSC,AbstractVector{<:Integer}}
+
+soft_complexity(res::OptResults, p::OptParams, hp::HarmonicOptParams, clusters::_ClusterSpec) =
+    soft_complexity(feature_matrix(res, p, hp), clusters)
+
+soft_complexity(x::AbstractVector, p::OptParams, hp::HarmonicOptParams, clusters::_ClusterSpec) =
+    soft_complexity(feature_matrix(x, p, hp), clusters)
 
 # exact bounding-sphere complexity: reporting only (not differentiable)
 complexity(res::OptResults, p::OptParams, hp::HarmonicOptParams) =

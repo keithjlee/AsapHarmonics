@@ -4,9 +4,14 @@
 
 """
     feature_matrix(analysis::HarmonicAnalysis) -> Matrix
+    feature_matrix(res_or_x, p, hp) -> Matrix
 
 Feature vectors as a `dims × n_nodes` matrix (one column per node, in model
-order) — the layout Clustering.jl and MultivariateStats.jl expect.
+order) — the layout Clustering.jl and MultivariateStats.jl expect, and the
+fully batched form every differentiable objective over the descriptors should
+build on. The design-evaluation methods (`res = solve_structure(x, p)` or the
+design vector `x` itself, with `hp` from [`harmonic_params`](@ref)) **require
+AsapOptim.jl** — implemented in a package extension.
 """
 feature_matrix(ha::HarmonicAnalysis) = reduce(hcat, ha.featurevectors)
 
@@ -144,6 +149,83 @@ end
 soft_complexity(ha::HarmonicAnalysis) = soft_complexity(ha.featurevectors)
 
 """
+    cluster_projector(assignments) -> SparseMatrixCSC
+
+The block-averaging projector `P` of an integer cluster assignment:
+`P[i, j] = 1/nₖ` when nodes `i` and `j` share cluster `k` (0 otherwise), so
+column `i` of `F * P` is the centroid of node `i`'s cluster. Symmetric and
+idempotent, and constant for fixed assignments — build it once per
+(re)clustering and reuse it across objective evaluations
+(`soft_complexity(F, P)` / the AsapOptim extension's
+`soft_complexity(x, p, hp, P)`).
+"""
+function cluster_projector(assignments::AbstractVector{<:Integer})
+    n = length(assignments)
+    Is = Int[]; Js = Int[]; Vs = Float64[]
+
+    for c in unique(assignments)
+        m = findall(==(c), assignments)
+        w = 1 / length(m)
+        for i in m, j in m
+            push!(Is, i); push!(Js, j); push!(Vs, w)
+        end
+    end
+
+    return sparse(Is, Js, Vs, n, n)
+end
+
+"""
+    soft_complexity(F::AbstractMatrix, P::SparseMatrixCSC)
+    soft_complexity(analysis_or_featurevectors_or_F, assignments)
+
+Within-cluster smooth complexity: the RMS distance of the nodal feature
+vectors from their **own cluster's** centroid,
+`√(1/n · Σᵢ ‖FVᵢ − centroid of cluster(i)‖²)` — the clustered counterpart of
+the global [`soft_complexity`](@ref), and the k-means objective in feature
+space. Minimize it (with fixed `assignments`) to standardize each connection
+family; recompute assignments between optimization rounds for Lloyd-style
+alternation.
+
+`P` is the constant block-averaging projector from
+[`cluster_projector`](@ref); pass it directly in hot loops to avoid
+rebuilding it from `assignments` every evaluation.
+"""
+soft_complexity(F::AbstractMatrix, P::SparseMatrixCSC) =
+    sqrt(sum(abs2, F - _mulconst(F, P)) / size(F, 2))
+
+function soft_complexity(F::AbstractMatrix, assignments::AbstractVector{<:Integer})
+    size(F, 2) == length(assignments) ||
+        throw(DimensionMismatch("$(size(F, 2)) feature vectors for $(length(assignments)) assignments"))
+
+    return soft_complexity(F, cluster_projector(assignments))
+end
+
+soft_complexity(fvs::AbstractVector{<:AbstractVector}, assignments::AbstractVector{<:Integer}) =
+    soft_complexity(reduce(hcat, fvs), assignments)
+
+soft_complexity(ha::HarmonicAnalysis, assignments::AbstractVector{<:Integer}) =
+    soft_complexity(ha.featurevectors, assignments)
+
+"""
+    soft_cluster_complexities(analysis, assignments)
+    soft_cluster_complexities(featurevectors, assignments)
+
+Per-cluster smooth complexity: the RMS distance of each cluster's feature
+vectors from that cluster's centroid, in order of sorted cluster label — the
+smooth counterpart of [`cluster_complexities`](@ref) (each entry is bounded by
+twice the corresponding bounding-sphere radius).
+"""
+function soft_cluster_complexities(fvs::AbstractVector{<:AbstractVector}, assignments::AbstractVector{<:Integer})
+    length(fvs) == length(assignments) ||
+        throw(DimensionMismatch("$(length(fvs)) feature vectors for $(length(assignments)) assignments"))
+
+    return [soft_complexity(fvs[findall(==(c), assignments)]) for c in sort!(unique(assignments))]
+end
+
+soft_cluster_complexities(ha::HarmonicAnalysis, assignments::AbstractVector{<:Integer}) =
+    soft_cluster_complexities(ha.featurevectors, assignments)
+
+"""
     cluster_complexities(analysis, assignments)
     cluster_complexities(featurevectors, assignments)
 
@@ -193,14 +275,19 @@ _constmul(A::AbstractMatrix, x) = A * x   # A constant
 _mulconst(X, A::AbstractVecOrMat) = X * A # A constant
 
 """
-    harmonic_params(p; delta = 20, dims = 16, dimension = 3)
+    harmonic_params(p; delta = 20, dims = 16, dimension = 3, weights = :force)
 
 Precompile the constant (non-differentiable) data of a shape-descriptor
 evaluation over an `AsapOptim.OptParams`: per-node incident elements and
 orientation signs, applied-load bumps, support flags, and the applied-load
 matrix for equilibrium reaction recovery. Feed the result to
-[`feature_vectors`](@ref), [`soft_complexity`](@ref), and
-[`complexity`](@ref). **Requires AsapOptim.jl** (`using AsapOptim`) —
+[`feature_matrix`](@ref), [`feature_vectors`](@ref),
+[`soft_complexity`](@ref), and [`complexity`](@ref).
+
+`weights = :unit` builds geometry-only descriptors — incident member
+directions with unit magnitudes, no load or reaction bumps — whose
+design-vector evaluations differentiate through node positions alone, with
+**no structural solve**. **Requires AsapOptim.jl** (`using AsapOptim`) —
 implemented in a package extension.
 """
 function harmonic_params end
