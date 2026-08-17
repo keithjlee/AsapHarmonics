@@ -100,10 +100,31 @@ function circular_feature_vector(forcefunction::AbstractVector{Float64}; dims::I
     return abs.(rfft(forcefunction)[1:dims])
 end
 
-# visualization helpers: Cartesian coordinates of a (θ, ϕ) grid, for plotting
-# force signatures as radially-scaled sphere surfaces.
+"""
+    make_xsphere(thetas, phis) -> Matrix
+
+X coordinates of the unit-sphere grid spanned by latitude samples `thetas`
+and longitude samples `phis` (`x = cos(ϕ)sin(θ)`). Visualization helper: scale
+the (`make_xsphere`, [`make_ysphere`](@ref), [`make_zsphere`](@ref)) triple
+radially by a sampled signature (see [`sampled_force_function`](@ref),
+[`sphere_points`](@ref)) to plot force signatures as sphere surfaces.
+"""
 make_xsphere(thetas::AbstractVector, phis::AbstractVector) = [cos(ϕ) * sin(θ) for θ in thetas, ϕ in phis]
+
+"""
+    make_ysphere(thetas, phis) -> Matrix
+
+Y coordinates (`y = sin(ϕ)sin(θ)`) of the unit-sphere grid spanned by `thetas`
+and `phis` — see [`make_xsphere`](@ref).
+"""
 make_ysphere(thetas::AbstractVector, phis::AbstractVector) = [sin(ϕ) * sin(θ) for θ in thetas, ϕ in phis]
+
+"""
+    make_zsphere(thetas, phis) -> Matrix
+
+Z coordinates (`z = cos(θ)`) of the unit-sphere grid spanned by `thetas` and
+`phis` — see [`make_xsphere`](@ref).
+"""
 make_zsphere(thetas::AbstractVector, phis::AbstractVector) = [cos(θ) for θ in thetas, ϕ in phis]
 
 """

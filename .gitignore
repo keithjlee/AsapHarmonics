@@ -5,3 +5,5 @@ scratch.jl
 CLAUDE.md
 PLAN.md
 examples/Manifest.toml
+docs/Manifest.toml
+docs/build/
