@@ -1,7 +1,7 @@
 name = "AsapHarmonics"
 uuid = "6cb0ef37-c0b4-4d5d-965f-0e79a17d1705"
-authors = ["kjl_macbook <keithjl@mit.edu>"]
 version = "2.0.0-DEV"
+authors = ["kjl_macbook <keithjl@mit.edu>"]
 
 [deps]
 Asap = "763a8c06-ba23-41fc-b385-b3b57b52403a"
@@ -18,14 +18,15 @@ ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
 Clustering = "aaaa29a8-35af-508c-8bc3-b662a17a0fe5"
 MultivariateStats = "6f286f6a-111f-5878-ab1e-185364afe411"
 
+[sources]
+Asap = {path = "../Asap"}
+AsapOptim = {path = "../AsapOptim"}
+
 [extensions]
 AsapHarmonicsChainRulesExt = "ChainRulesCore"
 AsapHarmonicsClusteringExt = "Clustering"
 AsapHarmonicsMDSExt = "MultivariateStats"
 AsapHarmonicsOptimExt = "AsapOptim"
-
-[sources]
-AsapOptim = {path = "../AsapOptim"}
 
 [compat]
 Asap = "1"
